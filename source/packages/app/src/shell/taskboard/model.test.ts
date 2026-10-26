@@ -5,12 +5,14 @@ import {
   bindSessionToIssue,
   buildDiscussionContextXml,
   buildExecutionPromptFromIssue,
+  buildIssueComposerDraft,
   createDefaultTaskboardState,
   createIssue,
   deleteIssue,
   findIssueBySessionId,
   parseLeadingAgentMention,
   toggleThreadResolved,
+  unbindSessionFromIssue,
   updateIssueDetails,
   updateIssueStatus,
 } from "./model"
@@ -128,7 +130,14 @@ describe("taskboard model", () => {
     const execMatch = findIssueBySessionId(state, "ses_exec_101")
     expect(execMatch?.issue.id).toBe("OC-101")
     expect(execMatch?.role).toBe("execution")
-    expect( findIssueBySessionId(state, "ses_unknown") ).toBeUndefined()
+    expect(findIssueBySessionId(state, "ses_unknown")).toBeUndefined()
+
+    state = unbindSessionFromIssue(state, "OC-101", "ses_exec_101")
+    expect(findIssueBySessionId(state, "ses_exec_101")).toBeUndefined()
+    expect(findIssueBySessionId(state, "ses_disc_101")?.issue.id).toBe("OC-101")
+
+    const draft = buildIssueComposerDraft(state.issues.find((i) => i.id === "OC-101")!)
+    expect(draft).toContain("[OC-101]")
   })
 
   test("parseLeadingAgentMention and addCustomAgentProfile support built-in and custom @Agents", () => {

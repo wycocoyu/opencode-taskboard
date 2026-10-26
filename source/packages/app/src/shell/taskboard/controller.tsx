@@ -26,8 +26,7 @@ import {
   addCustomAgentProfile,
   appendDiscussionThread,
   bindSessionToIssue,
-  buildDiscussionContextXml,
-  buildExecutionPromptFromIssue,
+  buildIssueComposerDraft,
   buildSimulatedAgentReply,
   createDefaultTaskboardState,
   createIssue as createIssueModel,
@@ -35,6 +34,7 @@ import {
   findIssueBySessionId as findIssueBySessionIdModel,
   parseLeadingAgentMention,
   toggleThreadResolved as toggleThreadResolvedModel,
+  unbindSessionFromIssue as unbindSessionFromIssueModel,
   updateIssueDetails as updateIssueDetailsModel,
   updateIssueStatus as updateIssueStatusModel,
   updateThreadConclusion as updateThreadConclusionModel,
@@ -46,6 +46,12 @@ import {
   type TaskboardState,
   type TaskboardViewMode,
 } from "./model"
+
+export type BoundSessionSummary = {
+  id: string
+  title: string
+  directory: string
+}
 
 export type TaskboardContextValue = {
   ready: Accessor<boolean>
@@ -68,6 +74,8 @@ export type TaskboardContextValue = {
   setSplitRatio: (ratio: number) => void
   busySessionCreation: Accessor<boolean>
   availableAgents: Accessor<ReadonlyArray<TaskboardAgentProfile>>
+  recentSessions: Accessor<ReadonlyArray<BoundSessionSummary>>
+  getSessionTitle: (sessionId: string) => string
   openBoard: () => void
   openDiscussion: (issueId?: string) => void
   openSplit: (issueId?: string) => void
@@ -81,7 +89,7 @@ export type TaskboardContextValue = {
       assigneeAgent?: string
       worktree?: string
     },
-    options?: { openDiscussionImmediately?: boolean },
+    options?: { openDiscussionImmediately?: boolean; bindActiveSession?: boolean },
   ) => TaskboardIssue | undefined
   updateIssueStatus: (issueId: string, status: TaskboardColumnId) => void
   updateIssueDetails: (
@@ -97,10 +105,22 @@ export type TaskboardContextValue = {
   addCustomAgent: (profile: CustomAgentProfile) => void
   spawnOrOpenExecutionSession: (
     issueId?: string,
-    options?: { forceNewSession?: boolean; createNewWorktree?: boolean; sendContextPrompt?: boolean },
+    options?: {
+      forceNewSession?: boolean
+      createNewWorktree?: boolean
+      sendContextPrompt?: boolean
+      openInSplitPane?: boolean
+    },
   ) => Promise<string | undefined>
+  openBoundSession: (
+    issueId: string,
+    sessionId?: string,
+    options?: { inSplitPane?: boolean; fillComposer?: boolean },
+  ) => Promise<string | undefined>
+  fillIssueToSessionComposer: (issueId: string, sessionId?: string) => Promise<boolean>
   injectConclusionsToExecutionSession: (issueId?: string) => Promise<boolean>
   syncExecutionProgressToIssue: (issueId?: string, nextStatus?: TaskboardColumnId) => Promise<void>
+  bindActiveSessionToIssue: (issueId: string) => boolean
   bindExistingSessionToIssue: (
     issueId: string,
     sessionId: string,
@@ -108,6 +128,7 @@ export type TaskboardContextValue = {
     serverKey?: string,
     directory?: string,
   ) => void
+  unbindSessionFromIssue: (issueId: string, sessionId: string) => void
   findIssueBySessionId: (
     sessionId: string | undefined,
   ) => { issue: TaskboardIssue; role: "discussion" | "execution" | "bound" } | undefined
@@ -133,7 +154,7 @@ export function TaskboardProvider(props: ParentProps) {
   const split = useOptionalSplitView()
 
   const [persistedState, setPersistedState, , ready] = persisted(
-    Persist.global("taskboard.v2"),
+    Persist.global("taskboard.kanban.v1"),
     TaskboardPersistedSchema,
     createDefaultTaskboardState(),
   )
@@ -142,7 +163,7 @@ export function TaskboardProvider(props: ParentProps) {
 
   const state = createMemo<TaskboardState>(() => ({
     enabled: Boolean(persistedState.enabled),
-    viewMode: persistedState.viewMode,
+    viewMode: persistedState.viewMode === "board" ? "board" : "sessions",
     activeIssueId: persistedState.activeIssueId,
     targetAgent: persistedState.targetAgent,
     deliveryMode: persistedState.deliveryMode,
@@ -155,7 +176,7 @@ export function TaskboardProvider(props: ParentProps) {
   const commitState = (next: TaskboardState) => {
     batch(() => {
       setPersistedState("enabled", next.enabled)
-      setPersistedState("viewMode", next.viewMode)
+      setPersistedState("viewMode", next.viewMode === "board" ? "board" : "sessions")
       setPersistedState("activeIssueId", next.activeIssueId)
       setPersistedState("targetAgent", next.targetAgent)
       setPersistedState("deliveryMode", next.deliveryMode)
@@ -198,6 +219,37 @@ export function TaskboardProvider(props: ParentProps) {
       conn,
       serverKey,
       directory: project?.worktree ?? selection.directory ?? "",
+    }
+  }
+
+  const recentSessions = createMemo<ReadonlyArray<BoundSessionSummary>>(() => {
+    try {
+      const { conn } = resolveActiveServerAndDirectory()
+      if (!conn) return []
+      const ctx = global.ensureServerCtx(conn)
+      return ctx.data.session
+        .list()
+        .filter((item) => !item.parentID)
+        .slice(0, 30)
+        .map((item) => ({
+          id: item.id,
+          title: item.title?.trim() || item.id,
+          directory: item.location.directory,
+        }))
+    } catch {
+      return []
+    }
+  })
+
+  const getSessionTitle = (sessionId: string): string => {
+    try {
+      const { conn } = resolveActiveServerAndDirectory()
+      if (!conn) return sessionId
+      const ctx = global.ensureServerCtx(conn)
+      const found = ctx.data.session.get(sessionId)
+      return found?.title?.trim() || sessionId
+    } catch {
+      return sessionId
     }
   }
 
@@ -283,20 +335,34 @@ export function TaskboardProvider(props: ParentProps) {
     directory: string,
     sessionId: string,
     text: string,
-    options?: { onlyIfEmpty?: boolean },
+    options?: { onlyIfEmpty?: boolean; inSplitPane?: boolean },
   ) => {
-    const tab = tabs.addSessionTab({ server: serverKey, sessionId })
-    tabs.select(tab)
-    if (split && split.count() > 1) {
-      split.setLayoutCount(1)
-    }
     const { conn } = resolveActiveServerAndDirectory()
     const targetConn =
       global.servers.list().find((item) => ServerConnection.key(item) === serverKey) ?? conn
-    if (!targetConn || !directory) return
-    const ctx = global.ensureServerCtx(targetConn)
+    const ctx = targetConn ? global.ensureServerCtx(targetConn) : undefined
+    const resolvedDir =
+      directory ||
+      ctx?.data.session.get(sessionId)?.location.directory ||
+      ctx?.projects.last() ||
+      ctx?.projects.list()[0]?.worktree ||
+      ""
+
+    if (options?.inSplitPane && split) {
+      split.openSessionInSplit({
+        server: serverKey,
+        sessionId,
+        directory: resolvedDir,
+      })
+    } else {
+      const tab = tabs.addSessionTab({ server: serverKey, sessionId })
+      tabs.select(tab)
+    }
+
+    if (!targetConn || !resolvedDir || !ctx) return
+    const tab = tabs.addSessionTab({ server: serverKey, sessionId })
     const composerState = createTabComposerState(tabs, tab, ctx.sdk.scope, {
-      dir: base64Encode(directory),
+      dir: base64Encode(resolvedDir),
       id: sessionId,
     })
     await composerState.ready.promise
@@ -335,15 +401,15 @@ export function TaskboardProvider(props: ParentProps) {
       setPersistedState("viewMode", next ? "board" : "sessions")
     })
     showToast({
-      title: next ? "✅ 已开启项目 Issue 看板与讨论模块" : "已关闭项目 Issue 看板与讨论模块",
+      title: next ? "✅ 已开启项目 Issue 看板" : "已关闭项目 Issue 看板",
       description: next
-        ? "可通过看板右上角「停用模块」或快捷键 ⌘⇧K 随时关闭"
-        : "默认不再注入侧栏与主工作区，按 ⌘⇧K 可随时开启",
+        ? "可通过看板右上角「隐藏看板」或快捷键 ⌘⇧K 随时切换"
+        : "已隐藏侧栏看板入口，按 ⌘⇧K 可重新开启",
     })
   }
 
   const setViewMode = (mode: TaskboardViewMode) => {
-    setPersistedState("viewMode", mode)
+    setPersistedState("viewMode", mode === "board" ? "board" : "sessions")
   }
 
   const setActiveIssueId = (id: string) => {
@@ -373,37 +439,13 @@ export function TaskboardProvider(props: ParentProps) {
   const openDiscussion = (issueId?: string) => {
     batch(() => {
       if (issueId) setActiveIssueId(issueId)
-      setViewMode("discussion")
+      setViewMode("board")
     })
   }
 
   const openSplit = (issueId?: string) => {
-    batch(() => {
-      if (issueId) setActiveIssueId(issueId)
-      setViewMode("split")
-    })
-    const targetIssue = issueId ? state().issues.find((i) => i.id === issueId) : activeIssue()
-    if (!targetIssue) return
-    if (targetIssue.executionSessionId) {
-      const { conn, serverKey, directory } = resolveActiveServerAndDirectory()
-      const srv = targetIssue.serverKey ? ServerConnection.Key.make(targetIssue.serverKey) : serverKey
-      const ctx = conn ? global.ensureServerCtx(conn) : undefined
-      const targetDir =
-        targetIssue.directory ||
-        directory ||
-        ctx?.projects.last() ||
-        ctx?.projects.list()[0]?.worktree ||
-        ""
-      void fillExecutionSessionComposer(
-        srv,
-        targetDir,
-        targetIssue.executionSessionId,
-        buildExecutionPromptFromIssue(targetIssue),
-        { onlyIfEmpty: true },
-      )
-    } else {
-      void spawnOrOpenExecutionSession(targetIssue.id, { sendContextPrompt: true })
-    }
+    if (issueId) setActiveIssueId(issueId)
+    void spawnOrOpenExecutionSession(issueId, { sendContextPrompt: false })
   }
 
   const openSessions = () => {
@@ -412,67 +454,57 @@ export function TaskboardProvider(props: ParentProps) {
 
   command.register("taskboard", () => [
     {
-      id: "taskboard.toggleEnabled",
-      title: state().enabled ? "关闭并隐藏项目 Issue 看板模块" : "开启项目 Issue 看板模块 (实验性)",
+      id: "taskboard.toggleBoard",
+      title: state().viewMode === "board" ? "返回会话工作区" : "打开项目 Issue 看板",
       category: "View",
       keybind: "mod+shift+k",
-      onSelect: () => toggleEnabled(),
-    },
-    {
-      id: "taskboard.openBoard",
-      title: "打开项目 Issue 看板",
-      category: "View",
-      onSelect: () => {
-        setEnabled(true)
-        openBoard()
-      },
-    },
-    {
-      id: "taskboard.openDiscussion",
-      title: "打开 @多Agent 需求讨论室",
-      category: "View",
-      keybind: "mod+shift+d",
-      onSelect: () => {
-        setEnabled(true)
-        openDiscussion()
-      },
-    },
-    {
-      id: "taskboard.openSplit",
-      title: "切换左讨论 + 右执行双屏联动",
-      category: "View",
-      keybind: "mod+shift+l",
       onSelect: () => {
         if (!state().enabled) {
           setEnabled(true)
-          openSplit()
+          openBoard()
           return
         }
-        if (state().viewMode === "split") {
+        if (state().viewMode === "board") {
           openSessions()
         } else {
-          openSplit()
+          openBoard()
         }
       },
+    },
+    {
+      id: "taskboard.toggleEnabled",
+      title: state().enabled ? "隐藏项目 Issue 看板入口" : "显示项目 Issue 看板入口",
+      category: "View",
+      onSelect: () => toggleEnabled(),
     },
   ])
 
   const createIssue: TaskboardContextValue["createIssue"] = (input, options) => {
-    const next = createIssueModel(state(), {
+    let next = createIssueModel(state(), {
       ...input,
-      seedDiscussion: true,
-    })
-    commitState({
-      ...next,
-      viewMode: options?.openDiscussionImmediately ? "discussion" : "board",
+      seedDiscussion: false,
     })
     const created = next.issues[0]
+    if (created && options?.bindActiveSession) {
+      const route = layout.route()
+      if (route.type === "session") {
+        const { directory } = resolveActiveServerAndDirectory()
+        next = bindSessionToIssue(next, created.id, {
+          kind: "execution",
+          sessionId: route.sessionId,
+          serverKey: route.server,
+          directory,
+        })
+      }
+    }
+    commitState({
+      ...next,
+      viewMode: "board",
+    })
     if (created) {
       showToast({
         title: `已创建议题 ${created.id}`,
-        description: options?.openDiscussionImmediately
-          ? `已进入 ${created.id} 的 @多Agent 需求讨论室`
-          : created.title,
+        description: created.title,
       })
     }
     return created
@@ -527,16 +559,7 @@ export function TaskboardProvider(props: ParentProps) {
     threadId,
     customConclusion,
   ) => {
-    const next = toggleThreadResolvedModel(state(), issueId, threadId, customConclusion)
-    commitState(next)
-    const updatedIssue = next.issues.find((i) => i.id === issueId)
-    const updatedThread = updatedIssue?.discussionThreads.find((t) => t.id === threadId)
-    showToast({
-      title: updatedThread?.resolved ? "✅ 已标为结论并折叠" : "已展开完整讨论串",
-      description: updatedThread?.resolved
-        ? "该结论已加入 <discussion_context>，可一键注入右侧执行会话"
-        : undefined,
-    })
+    commitState(toggleThreadResolvedModel(state(), issueId, threadId, customConclusion))
   }
 
   const updateThreadConclusion: TaskboardContextValue["updateThreadConclusion"] = (
@@ -549,10 +572,78 @@ export function TaskboardProvider(props: ParentProps) {
 
   const addCustomAgent: TaskboardContextValue["addCustomAgent"] = (profile) => {
     commitState(addCustomAgentProfile(state(), profile))
+  }
+
+  const openBoundSession: TaskboardContextValue["openBoundSession"] = async (
+    issueId,
+    sessionId,
+    options,
+  ) => {
+    const issue = state().issues.find((i) => i.id === issueId)
+    if (!issue) return undefined
+    const targetSessionId = sessionId ?? issue.executionSessionId ?? issue.boundSessionIds[0]
+    if (!targetSessionId) return undefined
+
+    setActiveIssueId(issue.id)
+    setViewMode("sessions")
+
+    const { serverKey, directory } = resolveActiveServerAndDirectory()
+    const srv = issue.serverKey ? ServerConnection.Key.make(issue.serverKey) : serverKey
+    const targetDir = issue.directory || directory
+
+    if (options?.fillComposer) {
+      await fillExecutionSessionComposer(
+        srv,
+        targetDir,
+        targetSessionId,
+        buildIssueComposerDraft(issue),
+        { inSplitPane: options.inSplitPane },
+      )
+      showToast({
+        title: `📝 已打开关联会话并填入 ${issue.id} 需求`,
+        description: "草稿已填入底部输入框，请确认后手动点击发送",
+      })
+    } else if (options?.inSplitPane && split) {
+      split.openSessionInSplit({
+        server: srv,
+        sessionId: targetSessionId,
+        directory: targetDir,
+      })
+    } else {
+      const tab = tabs.addSessionTab({ server: srv, sessionId: targetSessionId })
+      tabs.select(tab)
+    }
+
+    return targetSessionId
+  }
+
+  const fillIssueToSessionComposer: TaskboardContextValue["fillIssueToSessionComposer"] = async (
+    issueId,
+    sessionId,
+  ) => {
+    const issue = state().issues.find((i) => i.id === issueId)
+    if (!issue) return false
+    const route = layout.route()
+    const targetSessionId =
+      sessionId ??
+      (route.type === "session" ? route.sessionId : undefined) ??
+      issue.executionSessionId ??
+      issue.boundSessionIds[0]
+    if (!targetSessionId) return false
+
+    const { serverKey, directory } = resolveActiveServerAndDirectory()
+    const srv = issue.serverKey ? ServerConnection.Key.make(issue.serverKey) : serverKey
+    await fillExecutionSessionComposer(
+      srv,
+      issue.directory || directory,
+      targetSessionId,
+      buildIssueComposerDraft(issue),
+    )
     showToast({
-      title: `已添加角色 @${profile.id.replace(/^@/, "")}`,
-      description: profile.description,
+      title: `📝 已将 ${issue.id} 需求填入输入框`,
+      description: "不会自动发送，请按需补充或 @子Agent 后手动发送",
     })
+    return true
   }
 
   const spawnOrOpenExecutionSession: TaskboardContextValue["spawnOrOpenExecutionSession"] = async (
@@ -565,33 +656,19 @@ export function TaskboardProvider(props: ParentProps) {
 
     setActiveIssueId(issue.id)
 
-    const { conn, serverKey, directory } = resolveActiveServerAndDirectory()
-    if (!conn) {
-      setViewMode("split")
-      return issue.executionSessionId
+    const existingSessionId = issue.executionSessionId ?? issue.boundSessionIds[0]
+    if (existingSessionId && !options?.forceNewSession) {
+      return openBoundSession(issue.id, existingSessionId, {
+        inSplitPane: options?.openInSplitPane,
+        fillComposer: Boolean(options?.sendContextPrompt),
+      })
     }
+
+    const { conn, serverKey, directory } = resolveActiveServerAndDirectory()
+    if (!conn) return undefined
 
     const ctx = global.ensureServerCtx(conn)
     const baseDir = issue.directory || directory || ctx.projects.last() || ctx.projects.list()[0]?.worktree || ""
-
-    if (issue.executionSessionId && !options?.forceNewSession) {
-      const srv = issue.serverKey ? ServerConnection.Key.make(issue.serverKey) : serverKey
-      setViewMode("split")
-      await fillExecutionSessionComposer(
-        srv,
-        baseDir,
-        issue.executionSessionId,
-        buildExecutionPromptFromIssue(issue),
-        { onlyIfEmpty: !options?.sendContextPrompt },
-      )
-      if (options?.sendContextPrompt) {
-        showToast({
-          title: `📝 已将 ${issue.id} 上下文填入右侧输入框`,
-          description: "请确认或补充后手动点击发送",
-        })
-      }
-      return issue.executionSessionId
-    }
 
     setBusySessionCreation(true)
     try {
@@ -612,10 +689,7 @@ export function TaskboardProvider(props: ParentProps) {
         } catch {}
       }
 
-      if (!targetDir) {
-        setViewMode("split")
-        return undefined
-      }
+      if (!targetDir) return undefined
 
       ctx.projects.open(targetDir)
       ctx.projects.touch(targetDir)
@@ -651,22 +725,26 @@ export function TaskboardProvider(props: ParentProps) {
       }
       commitState({
         ...nextState,
-        viewMode: "split",
+        viewMode: "sessions",
       })
 
-      const promptPayload = buildExecutionPromptFromIssue(issue)
-      await fillExecutionSessionComposer(serverKey, targetDir, created.id, promptPayload)
+      await fillExecutionSessionComposer(
+        serverKey,
+        targetDir,
+        created.id,
+        buildIssueComposerDraft(issue),
+        { inSplitPane: options?.openInSplitPane },
+      )
 
       showToast({
-        title: `⚡ 已为 ${issue.id} 绑定会话并填入输入框`,
-        description: "上下文已填入右侧输入框，请确认后手动发送",
+        title: `⚡ 已为 ${issue.id} 创建绑定会话`,
+        description: "需求描述已填入会话输入框（不会自动发送），请确认后手动发送",
       })
 
       return created.id
     } catch (err) {
-      setViewMode("split")
       showToast({
-        title: "已切换到双屏联动视图",
+        title: "创建绑定会话失败",
         description: err instanceof Error ? err.message : undefined,
       })
       return undefined
@@ -679,32 +757,7 @@ export function TaskboardProvider(props: ParentProps) {
     issueId,
   ) => {
     const targetId = issueId ?? state().activeIssueId
-    const issue = state().issues.find((i) => i.id === targetId) ?? activeIssue()
-    if (!issue) return false
-
-    if (!issue.executionSessionId) {
-      const createdId = await spawnOrOpenExecutionSession(issue.id, { sendContextPrompt: true })
-      return !!createdId
-    }
-
-    const { conn, serverKey, directory } = resolveActiveServerAndDirectory()
-    if (!conn) return false
-    const ctx = global.ensureServerCtx(conn)
-    const srv = issue.serverKey ? ServerConnection.Key.make(issue.serverKey) : serverKey
-    const targetDir =
-      issue.directory || directory || ctx.projects.last() || ctx.projects.list()[0]?.worktree || ""
-    const xml = buildDiscussionContextXml(issue, "delta")
-    const draftText = `${xml}\n\n请基于以上最新收敛的讨论结论继续执行议题 ${issue.id}（${issue.title}）。`
-    try {
-      await fillExecutionSessionComposer(srv, targetDir, issue.executionSessionId, draftText)
-      showToast({
-        title: `📝 已将 ${issue.id} 最新结论填入右侧输入框`,
-        description: `共填入 ${issue.discussionThreads.filter((t) => t.resolved).length} 条已折叠结论，请手动发送`,
-      })
-      return true
-    } catch {
-      return false
-    }
+    return fillIssueToSessionComposer(targetId)
   }
 
   const syncExecutionProgressToIssue: TaskboardContextValue["syncExecutionProgressToIssue"] = async (
@@ -715,21 +768,47 @@ export function TaskboardProvider(props: ParentProps) {
     const issue = state().issues.find((i) => i.id === targetId) ?? activeIssue()
     if (!issue) return
 
-    let next = updateIssueStatusModel(state(), issue.id, nextStatus)
-    next = appendDiscussionThread(next, issue.id, {
-      author: "系统回写 (Execution Sync)",
-      targetAgent: "build",
-      question: `@build 同步执行会话 (${issue.executionSessionId ?? issue.worktree}) 的实施进度到看板`,
-      replyText: `已将执行会话最新改动同步回议题 ${issue.id}，看板状态更新为「${
-        nextStatus === "done" ? "已完成" : "待验收"
-      }」。`,
-    })
-    commitState(next)
+    commitState(updateIssueStatusModel(state(), issue.id, nextStatus))
 
     showToast({
-      title: `📤 已回写 ${issue.id} 进度到项目看板`,
-      description: `议题状态已推进至「${nextStatus === "done" ? "已完成" : "待验收"}」`,
+      title: `📤 已更新 ${issue.id} 看板状态`,
+      description: `当前状态已设为「${
+        nextStatus === "done"
+          ? "已完成"
+          : nextStatus === "review"
+            ? "待验收"
+            : nextStatus === "in_progress"
+              ? "进行中"
+              : nextStatus === "todo"
+                ? "待开始"
+                : "待规划"
+      }」`,
     })
+  }
+
+  const bindActiveSessionToIssue: TaskboardContextValue["bindActiveSessionToIssue"] = (issueId) => {
+    const route = layout.route()
+    if (route.type !== "session") {
+      showToast({
+        title: "当前未打开活跃会话",
+        description: "请先在左侧选择一个会话，或直接点击「+ 新建绑定会话」",
+      })
+      return false
+    }
+    const { directory } = resolveActiveServerAndDirectory()
+    commitState(
+      bindSessionToIssue(state(), issueId, {
+        kind: "execution",
+        sessionId: route.sessionId,
+        serverKey: route.server,
+        directory,
+      }),
+    )
+    showToast({
+      title: `🔗 已将当前会话绑定到 ${issueId}`,
+      description: getSessionTitle(route.sessionId),
+    })
+    return true
   }
 
   const bindExistingSessionToIssue: TaskboardContextValue["bindExistingSessionToIssue"] = (
@@ -749,7 +828,14 @@ export function TaskboardProvider(props: ParentProps) {
     )
     showToast({
       title: `🔗 已将会话绑定到 ${issueId}`,
-      description: kind === "execution" ? "已设为编码执行会话" : "已设为需求讨论会话",
+      description: getSessionTitle(sessionId),
+    })
+  }
+
+  const unbindSessionFromIssue: TaskboardContextValue["unbindSessionFromIssue"] = (issueId, sessionId) => {
+    commitState(unbindSessionFromIssueModel(state(), issueId, sessionId))
+    showToast({
+      title: `已解除 ${issueId} 与会话的绑定`,
     })
   }
 
@@ -777,6 +863,8 @@ export function TaskboardProvider(props: ParentProps) {
     setSplitRatio,
     busySessionCreation,
     availableAgents,
+    recentSessions,
+    getSessionTitle,
     openBoard,
     openDiscussion,
     openSplit,
@@ -790,9 +878,13 @@ export function TaskboardProvider(props: ParentProps) {
     updateThreadConclusion,
     addCustomAgent,
     spawnOrOpenExecutionSession,
+    openBoundSession,
+    fillIssueToSessionComposer,
     injectConclusionsToExecutionSession,
     syncExecutionProgressToIssue,
+    bindActiveSessionToIssue,
     bindExistingSessionToIssue,
+    unbindSessionFromIssue,
     findIssueBySessionId,
   }
 

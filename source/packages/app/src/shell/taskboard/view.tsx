@@ -1,11 +1,9 @@
 import { For, Show, createMemo, createSignal, type ParentProps } from "solid-js"
 import { Icon } from "@opencode/ui/icon"
-import { Tooltip } from "@opencode/ui/tooltip"
 import { useLayout } from "@/shell/state/layout"
 import { useOptionalTaskboard, useTaskboard } from "./controller"
 import {
   TASKBOARD_COLUMNS,
-  buildDiscussionContextXml,
   type TaskboardColumnId,
   type TaskboardIssue,
   type TaskboardPriority,
@@ -13,107 +11,60 @@ import {
 
 export function TaskboardSidebarNav() {
   const taskboard = useOptionalTaskboard()
+  const layout = useLayout()
   if (!taskboard) return null
 
-  const resolvedConclusionsCount = createMemo(() =>
-    taskboard
-      .state()
-      .issues.reduce((acc, issue) => acc + issue.discussionThreads.filter((t) => t.resolved).length, 0),
+  const activeSessionBinding = createMemo(() => {
+    const r = layout.route()
+    if (r.type !== "session") return undefined
+    return taskboard.findIssueBySessionId(r.sessionId)
+  })
+
+  const inProgressCount = createMemo(
+    () => taskboard.state().issues.filter((i) => i.status === "in_progress").length,
   )
 
   return (
     <Show when={taskboard.enabled()}>
       <div data-slot="taskboard-sidebar-nav" class="flex flex-col gap-1 pt-0.5 pb-1">
-      <div class="flex items-center gap-1">
-        <button
-          type="button"
-          data-action="sidebar-open-taskboard"
-          aria-pressed={taskboard.viewMode() === "board"}
-          onClick={() => {
-            if (taskboard.viewMode() === "board") {
-              taskboard.openSessions()
-            } else {
-              taskboard.openBoard()
-            }
-          }}
-          class="flex h-7 min-w-0 flex-1 items-center justify-between gap-2 rounded-lg border px-2.5 text-[12px] leading-4 transition-colors"
-          classList={{
-            "border-v2-background-bg-accent/55 bg-v2-background-bg-accent/15 text-v2-text-text-base [font-weight:560] shadow-2xs":
-              taskboard.viewMode() === "board",
-            "border-v2-border-border-base/60 bg-v2-background-bg-base/45 text-v2-text-text-muted hover:border-v2-border-border-strong hover:bg-v2-overlay-simple-overlay-hover hover:text-v2-text-text-base":
-              taskboard.viewMode() !== "board",
-          }}
-        >
-          <span class="flex min-w-0 items-center gap-1.5">
-            <Icon name="checklist" size="small" class="shrink-0 text-v2-icon-icon-muted" />
-            <span class="truncate">项目</span>
-            <span class="rounded bg-v2-overlay-simple-overlay-hover px-1.5 py-0.25 text-[10px] leading-3 text-v2-text-text-faint">
-              看板
-            </span>
-          </span>
-          <span class="font-mono text-[11px] leading-3 text-v2-text-text-faint">
-            {taskboard.state().issues.length}
-          </span>
-        </button>
-
-        <button
-          type="button"
-          data-action="sidebar-open-discussion"
-          aria-pressed={taskboard.viewMode() === "discussion" || taskboard.viewMode() === "split"}
-          onClick={() => {
-            if (taskboard.viewMode() === "discussion") {
-              taskboard.openSplit()
-            } else if (taskboard.viewMode() === "split") {
-              taskboard.openSessions()
-            } else {
-              taskboard.openDiscussion()
-            }
-          }}
-          class="flex h-7 min-w-0 flex-1 items-center justify-between gap-1.5 rounded-lg border px-2.5 text-[12px] leading-4 transition-colors"
-          classList={{
-            "border-v2-background-bg-accent/55 bg-v2-background-bg-accent/15 text-v2-text-text-base [font-weight:560] shadow-2xs":
-              taskboard.viewMode() === "discussion" || taskboard.viewMode() === "split",
-            "border-v2-border-border-base/60 bg-v2-background-bg-base/45 text-v2-text-text-muted hover:border-v2-border-border-strong hover:bg-v2-overlay-simple-overlay-hover hover:text-v2-text-text-base":
-              taskboard.viewMode() !== "discussion" && taskboard.viewMode() !== "split",
-          }}
-        >
-          <span class="flex min-w-0 items-center gap-1.5">
-            <Icon name="bubble-5" size="small" class="shrink-0 text-v2-icon-icon-muted" />
-            <span class="truncate">讨论</span>
-            <span class="rounded bg-v2-overlay-simple-overlay-hover px-1 py-0.25 text-[10px] leading-3 text-v2-text-text-faint">
-              @Agent
-            </span>
-          </span>
-          <span class="font-mono text-[10px] leading-3 text-v2-text-text-faint">
-            {taskboard.viewMode() === "split" ? "双屏" : `${resolvedConclusionsCount()}结论`}
-          </span>
-        </button>
-
-        <Tooltip placement="bottom" value="切换左屏 @多Agent 讨论 + 右屏执行会话双屏联动 (⌘⇧L)">
+        <div class="flex items-center gap-1">
           <button
             type="button"
-            data-action="sidebar-toggle-taskboard-split"
-            aria-label="切换左讨论右执行双屏联动"
-            aria-pressed={taskboard.viewMode() === "split"}
+            data-action="sidebar-open-taskboard"
+            aria-pressed={taskboard.viewMode() === "board"}
             onClick={() => {
-              if (taskboard.viewMode() === "split") {
+              if (taskboard.viewMode() === "board") {
                 taskboard.openSessions()
               } else {
-                taskboard.openSplit()
+                taskboard.openBoard()
               }
             }}
-            class="flex size-7 shrink-0 items-center justify-center rounded-lg border text-[11px] transition-colors"
+            class="flex h-7 min-w-0 flex-1 items-center justify-between gap-2 rounded-lg border px-2.5 text-[12px] leading-4 transition-colors"
             classList={{
-              "border-v2-background-bg-accent/60 bg-v2-background-bg-accent/20 text-v2-text-text-base":
-                taskboard.viewMode() === "split",
-              "border-v2-border-border-base/60 bg-v2-background-bg-base/45 text-v2-icon-icon-muted hover:border-v2-border-border-strong hover:bg-v2-overlay-simple-overlay-hover hover:text-v2-text-text-base":
-                taskboard.viewMode() !== "split",
+              "border-v2-background-bg-accent/55 bg-v2-background-bg-accent/15 text-v2-text-text-base [font-weight:560] shadow-2xs":
+                taskboard.viewMode() === "board",
+              "border-v2-border-border-base/60 bg-v2-background-bg-base/45 text-v2-text-text-muted hover:border-v2-border-border-strong hover:bg-v2-overlay-simple-overlay-hover hover:text-v2-text-text-base":
+                taskboard.viewMode() !== "board",
             }}
           >
-            <Icon name="split" size="small" />
+            <span class="flex min-w-0 items-center gap-1.5">
+              <Icon name="checklist" size="small" class="shrink-0 text-v2-icon-icon-muted" />
+              <span class="truncate">项目 Issue 看板</span>
+            </span>
+            <span class="flex shrink-0 items-center gap-1 font-mono text-[11px] leading-3 text-v2-text-text-faint">
+              <Show when={activeSessionBinding()}>
+                {(bound) => (
+                  <span class="rounded bg-indigo-500/20 px-1 py-0.25 text-[10px] text-indigo-300">
+                    {bound().issue.id}
+                  </span>
+                )}
+              </Show>
+              <span>
+                {inProgressCount()}/{taskboard.state().issues.length}
+              </span>
+            </span>
           </button>
-        </Tooltip>
-      </div>
+        </div>
       </div>
     </Show>
   )
@@ -129,12 +80,15 @@ export function TaskboardWorkbench(props: ParentProps) {
   const [draggedIssueId, setDraggedIssueId] = createSignal<string | null>(null)
   const [dragOverColumn, setDragOverColumn] = createSignal<TaskboardColumnId | null>(null)
 
-  let splitContainerRef: HTMLDivElement | undefined
+  const activeSessionId = createMemo(() => {
+    const r = layout.route()
+    return r.type === "session" ? r.sessionId : undefined
+  })
 
   const activeSessionBinding = createMemo(() => {
-    const r = layout.route()
-    if (r.type !== "session") return undefined
-    return taskboard.findIssueBySessionId(r.sessionId)
+    const sid = activeSessionId()
+    if (!sid) return undefined
+    return taskboard.findIssueBySessionId(sid)
   })
 
   const drawerIssue = createMemo(() => {
@@ -148,275 +102,205 @@ export function TaskboardWorkbench(props: ParentProps) {
     setCreateModalOpen(true)
   }
 
-  const handleSplitResizerPointerDown = (e: PointerEvent) => {
-    if (e.button !== 0) return
-    e.preventDefault()
-    e.stopPropagation()
-    const target = e.currentTarget as HTMLElement
-    target.setPointerCapture(e.pointerId)
-
-    const onMove = (moveEvent: PointerEvent) => {
-      if (!splitContainerRef) return
-      const rect = splitContainerRef.getBoundingClientRect()
-      if (rect.width <= 320) return
-      const nextRatio = (moveEvent.clientX - rect.left) / rect.width
-      taskboard.setSplitRatio(nextRatio)
-    }
-
-    const onUp = (upEvent: PointerEvent) => {
-      if (target.hasPointerCapture(upEvent.pointerId)) {
-        target.releasePointerCapture(upEvent.pointerId)
-      }
-      window.removeEventListener("pointermove", onMove)
-      window.removeEventListener("pointerup", onUp)
-      window.removeEventListener("pointercancel", onUp)
-    }
-
-    window.addEventListener("pointermove", onMove)
-    window.addEventListener("pointerup", onUp)
-    window.addEventListener("pointercancel", onUp)
-  }
-
   return (
     <Show when={taskboard.enabled()} fallback={props.children}>
       <div
-        ref={splitContainerRef}
         data-slot="taskboard-workbench-host"
         data-view-mode={taskboard.viewMode()}
         class="relative flex size-full min-h-0 min-w-0 flex-1 flex-col overflow-hidden [font-family:var(--v2-font-family-sans)]"
       >
-      {/* Mode 0: Normal Sessions View (with bound Issue banner if active session is linked to an Issue) */}
-      <Show when={taskboard.viewMode() === "sessions"}>
-        <Show when={activeSessionBinding()}>
-          {(binding) => (
-            <div
-              data-slot="taskboard-bound-session-banner"
-              class="mx-[var(--shell-inline-inset,8px)] mt-[var(--shell-top-inset,8px)] flex h-8 shrink-0 items-center justify-between gap-2 rounded-lg border border-v2-border-border-base/80 bg-v2-background-bg-layer-02/80 px-3 text-[12px] leading-4"
-            >
-              <div class="flex min-w-0 items-center gap-2">
-                <span class="rounded bg-v2-background-bg-accent/20 px-1.5 py-0.5 font-mono text-[11px] [font-weight:580] text-v2-text-text-base">
-                  {binding().issue.id}
-                </span>
-                <span class="truncate text-v2-text-text-base [font-weight:520]">
-                  {binding().issue.title}
-                </span>
-                <span class="shrink-0 rounded bg-v2-overlay-simple-overlay-hover px-1.5 py-0.5 text-[11px] text-v2-text-text-muted">
-                  {binding(). issue.discussionThreads.filter((t) => t.resolved).length} 条讨论结论已生效
-                </span>
-              </div>
+        {/* Mode 0: Normal Sessions View (with bound Issue bar if active session is linked to an Issue) */}
+        <Show when={taskboard.viewMode() !== "board"}>
+          <Show when={activeSessionBinding()}>
+            {(binding) => (
+              <div
+                data-slot="taskboard-bound-session-banner"
+                class="mx-[var(--shell-inline-inset,8px)] mt-[var(--shell-top-inset,8px)] flex h-8 shrink-0 items-center justify-between gap-2 rounded-lg border border-v2-border-border-base/80 bg-v2-background-bg-layer-02/80 px-3 text-[12px] leading-4"
+              >
+                <div class="flex min-w-0 items-center gap-2">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      taskboard.setActiveIssueId(binding().issue.id)
+                      setDrawerIssueId(binding().issue.id)
+                    }}
+                    class="rounded bg-indigo-500/20 px-1.5 py-0.5 font-mono text-[11px] [font-weight:600] text-indigo-300 ring-1 ring-inset ring-indigo-500/35 hover:bg-indigo-500/30"
+                    title="点击查看或编辑该 Issue 详情与绑定会话"
+                  >
+                    {binding().issue.id}
+                  </button>
+                  <span class="truncate text-v2-text-text-base [font-weight:520]">
+                    {binding().issue.title}
+                  </span>
+                  <select
+                    aria-label="更新绑定 Issue 状态"
+                    value={binding().issue.status}
+                    onChange={(e) =>
+                      taskboard.updateIssueStatus(
+                        binding().issue.id,
+                        e.currentTarget.value as TaskboardColumnId,
+                      )
+                    }
+                    class="h-6 shrink-0 rounded border border-v2-border-border-base/80 bg-v2-background-bg-base px-1.5 text-[11px] text-v2-text-text-base focus:outline-none"
+                  >
+                    <For each={TASKBOARD_COLUMNS}>
+                      {(col) => <option value={col.id}>{col.title}</option>}
+                    </For>
+                  </select>
+                </div>
 
-              <div class="flex shrink-0 items-center gap-1.5">
-                <button
-                  type="button"
-                  data-action="banner-open-split-discussion"
-                  onClick={() => taskboard.openSplit(binding().issue.id)}
-                  class="rounded-md border border-v2-border-border-base/80 bg-v2-background-bg-base px-2 py-1 text-[11px] text-v2-text-text-base transition-colors hover:bg-v2-overlay-simple-overlay-hover"
-                >
-                  🪟 左屏打开 @多Agent 讨论
-                </button>
-                <button
-                  type="button"
-                  data-action="banner-inject-conclusions"
-                  onClick={() => void taskboard.injectConclusionsToExecutionSession(binding().issue.id)}
-                  class="rounded-md border border-v2-border-border-base/80 bg-v2-background-bg-base px-2 py-1 text-[11px] text-v2-text-text-base transition-colors hover:bg-v2-overlay-simple-overlay-hover"
-                >
-                  📝 填入结论到输入框
-                </button>
-                <button
-                  type="button"
-                  data-action="banner-sync-to-board"
-                  onClick={() => void taskboard.syncExecutionProgressToIssue(binding().issue.id, "review")}
-                  class="rounded-md bg-v2-background-bg-accent px-2 py-1 text-[11px] [font-weight:540] text-white transition-opacity hover:opacity-90"
-                >
-                  📤 回写看板 (待验收)
-                </button>
-                <button
-                  type="button"
-                  data-action="banner-open-board"
-                  onClick={() => taskboard.openBoard()}
-                  class="rounded-md px-2 py-1 text-[11px] text-v2-text-text-muted hover:bg-v2-overlay-simple-overlay-hover hover:text-v2-text-text-base"
-                >
-                  📋 看板
-                </button>
+                <div class="flex shrink-0 items-center gap-1.5">
+                  <button
+                    type="button"
+                    data-action="banner-fill-issue-draft"
+                    onClick={() =>
+                      void taskboard.fillIssueToSessionComposer(binding().issue.id, activeSessionId())
+                    }
+                    class="rounded-md border border-v2-border-border-base/80 bg-v2-background-bg-base px-2 py-1 text-[11px] text-v2-text-text-base transition-colors hover:bg-v2-overlay-simple-overlay-hover"
+                    title="将当前 Issue 标题与需求描述填入底部输入框（不会自动发送）"
+                  >
+                    📝 填入需求到输入框
+                  </button>
+                  <Show when={activeSessionId()}>
+                    {(sid) => (
+                      <button
+                        type="button"
+                        data-action="banner-unbind-session"
+                        onClick={() => taskboard.unbindSessionFromIssue(binding().issue.id, sid())}
+                        class="rounded-md border border-v2-border-border-base/80 bg-v2-background-bg-base px-2 py-1 text-[11px] text-v2-text-text-muted transition-colors hover:bg-v2-overlay-simple-overlay-hover hover:text-v2-text-text-base"
+                        title="解除当前会话与该 Issue 的绑定"
+                      >
+                        解绑
+                      </button>
+                    )}
+                  </Show>
+                  <button
+                    type="button"
+                    data-action="banner-open-board"
+                    onClick={() => taskboard.openBoard()}
+                    class="rounded-md bg-v2-background-bg-accent/20 px-2 py-1 text-[11px] [font-weight:540] text-v2-text-text-base ring-1 ring-inset ring-v2-background-bg-accent/40 hover:bg-v2-background-bg-accent/30"
+                  >
+                    📋 打开看板
+                  </button>
+                </div>
+              </div>
+            )}
+          </Show>
+
+          <div class="flex size-full min-h-0 min-w-0 flex-1 flex-col overflow-hidden">
+            {props.children}
+          </div>
+        </Show>
+
+        {/* Mode 1: Pure Project Issue Kanban Board + Session Binding */}
+        <Show when={taskboard.viewMode() === "board"}>
+          <div
+            data-slot="taskboard-board-view"
+            class="flex size-full min-h-0 min-w-0 flex-1 flex-col overflow-hidden px-[var(--shell-inline-inset,8px)] pb-[var(--shell-bottom-inset,8px)] pt-[var(--shell-top-inset,8px)]"
+          >
+            <div class="flex size-full min-h-0 min-w-0 flex-1 flex-col overflow-hidden rounded-[10px] border border-v2-border-border-base/80 bg-v2-background-bg-base">
+              <TaskboardHeaderBar onOpenCreate={() => openCreateModal("backlog")} />
+
+              <div
+                data-slot="taskboard-columns"
+                class="flex min-h-0 flex-1 items-stretch gap-3 overflow-x-auto overflow-y-hidden p-3.5"
+              >
+                <For each={TASKBOARD_COLUMNS}>
+                  {(col) => {
+                    const columnIssues = createMemo(() => {
+                      const filter = taskboard.filterAgent()
+                      return taskboard
+                        .state()
+                        .issues.filter(
+                          (item) =>
+                            item.status === col.id &&
+                            (filter === "all" || item.assigneeAgent.toLowerCase() === filter.toLowerCase()),
+                        )
+                    })
+
+                    return (
+                      <div
+                        data-slot="taskboard-column"
+                        data-column-id={col.id}
+                        onDragOver={(e) => {
+                          e.preventDefault()
+                          setDragOverColumn(col.id)
+                        }}
+                        onDragLeave={() => {
+                          if (dragOverColumn() === col.id) setDragOverColumn(null)
+                        }}
+                        onDrop={(e) => {
+                          e.preventDefault()
+                          const id = draggedIssueId()
+                          setDraggedIssueId(null)
+                          setDragOverColumn(null)
+                          if (id) taskboard.updateIssueStatus(id, col.id)
+                        }}
+                        class="flex w-72 shrink-0 flex-col overflow-hidden rounded-xl border transition-colors"
+                        classList={{
+                          "border-v2-background-bg-accent bg-v2-background-bg-accent/5":
+                            dragOverColumn() === col.id,
+                          "border-v2-border-border-base/70 bg-v2-background-bg-deep/55":
+                            dragOverColumn() !== col.id,
+                        }}
+                      >
+                        <div class="flex h-10 shrink-0 items-center justify-between border-b border-v2-border-border-base/60 px-3">
+                          <div class="flex items-center gap-2">
+                            <span class="text-[13px] [font-weight:580] text-v2-text-text-base">
+                              {col.title}
+                            </span>
+                            <span class="rounded-full bg-v2-overlay-simple-overlay-hover px-2 py-0.5 font-mono text-[11px] leading-3 text-v2-text-text-muted">
+                              {columnIssues().length}
+                            </span>
+                          </div>
+                          <button
+                            type="button"
+                            data-action={`column-add-${col.id}`}
+                            onClick={() => openCreateModal(col.id)}
+                            class="flex size-6 items-center justify-center rounded-md text-v2-icon-icon-muted transition-colors hover:bg-v2-overlay-simple-overlay-hover hover:text-v2-text-text-base"
+                            title={`在「${col.title}」新建 Issue`}
+                          >
+                            <Icon name="plus" size="small" />
+                          </button>
+                        </div>
+
+                        <div class="flex-1 space-y-2.5 overflow-y-auto p-2.5">
+                          <For each={columnIssues()}>
+                            {(issue) => (
+                              <KanbanIssueCard
+                                issue={issue}
+                                onSelect={() => {
+                                  taskboard.setActiveIssueId(issue.id)
+                                  setDrawerIssueId(issue.id)
+                                }}
+                                onDragStart={() => setDraggedIssueId(issue.id)}
+                              />
+                            )}
+                          </For>
+                        </div>
+                      </div>
+                    )
+                  }}
+                </For>
               </div>
             </div>
+          </div>
+        </Show>
+
+        {/* Issue Detail & Session Binding Drawer */}
+        <Show when={drawerIssue()}>
+          {(issue) => (
+            <IssueDetailDrawer issue={issue()} onClose={() => setDrawerIssueId(null)} />
           )}
         </Show>
 
-        <div class="flex size-full min-h-0 min-w-0 flex-1 flex-col overflow-hidden">
-          {props.children}
-        </div>
-      </Show>
-
-      {/* Mode 1: Full Project Kanban Board */}
-      <Show when={taskboard.viewMode() === "board"}>
-        <div
-          data-slot="taskboard-board-view"
-          class="flex size-full min-h-0 min-w-0 flex-1 flex-col overflow-hidden px-[var(--shell-inline-inset,8px)] pb-[var(--shell-bottom-inset,8px)] pt-[var(--shell-top-inset,8px)]"
-        >
-          <div class="flex size-full min-h-0 min-w-0 flex-1 flex-col overflow-hidden rounded-[10px] border border-v2-border-border-base/80 bg-v2-background-bg-base">
-            <TaskboardHeaderBar onOpenCreate={() => openCreateModal("backlog")} />
-
-            <div
-              data-slot="taskboard-columns"
-              class="flex min-h-0 flex-1 items-stretch gap-3 overflow-x-auto overflow-y-hidden p-3.5"
-            >
-              <For each={TASKBOARD_COLUMNS}>
-                {(col) => {
-                  const columnIssues = createMemo(() => {
-                    const filter = taskboard.filterAgent()
-                    return taskboard
-                      .state()
-                      .issues.filter(
-                        (item) =>
-                          item.status === col.id &&
-                          (filter === "all" || item.assigneeAgent.toLowerCase() === filter.toLowerCase()),
-                      )
-                  })
-
-                  return (
-                    <div
-                      data-slot="taskboard-column"
-                      data-column-id={col.id}
-                      onDragOver={(e) => {
-                        e.preventDefault()
-                        setDragOverColumn(col.id)
-                      }}
-                      onDragLeave={() => {
-                        if (dragOverColumn() === col.id) setDragOverColumn(null)
-                      }}
-                      onDrop={(e) => {
-                        e.preventDefault()
-                        const id = draggedIssueId()
-                        setDraggedIssueId(null)
-                        setDragOverColumn(null)
-                        if (id) taskboard.updateIssueStatus(id, col.id)
-                      }}
-                      class="flex w-72 shrink-0 flex-col overflow-hidden rounded-xl border transition-colors"
-                      classList={{
-                        "border-v2-background-bg-accent bg-v2-background-bg-accent/5": dragOverColumn() === col.id,
-                        "border-v2-border-border-base/70 bg-v2-background-bg-deep/55": dragOverColumn() !== col.id,
-                      }}
-                    >
-                      <div class="flex h-10 shrink-0 items-center justify-between border-b border-v2-border-border-base/60 px-3">
-                        <div class="flex items-center gap-2">
-                          <span class="text-[13px] [font-weight:580] text-v2-text-text-base">{col.title}</span>
-                          <span class="rounded-full bg-v2-overlay-simple-overlay-hover px-2 py-0.5 font-mono text-[11px] leading-3 text-v2-text-text-muted">
-                            {columnIssues().length}
-                          </span>
-                        </div>
-                        <button
-                          type="button"
-                          data-action={`column-add-${col.id}`}
-                          onClick={() => openCreateModal(col.id)}
-                          class="flex size-6 items-center justify-center rounded-md text-v2-icon-icon-muted transition-colors hover:bg-v2-overlay-simple-overlay-hover hover:text-v2-text-text-base"
-                          title={`在「${col.title}」新建 Issue`}
-                        >
-                          <Icon name="plus" size="small" />
-                        </button>
-                      </div>
-
-                      <div class="flex-1 space-y-2.5 overflow-y-auto p-2.5">
-                        <For each={columnIssues()}>
-                          {(issue) => (
-                            <KanbanIssueCard
-                              issue={issue}
-                              onSelect={() => {
-                                taskboard.setActiveIssueId(issue.id)
-                                setDrawerIssueId(issue.id)
-                              }}
-                              onDragStart={() => setDraggedIssueId(issue.id)}
-                              onOpenDiscussion={() => taskboard.openDiscussion(issue.id)}
-                              onOpenSplit={() => void taskboard.spawnOrOpenExecutionSession(issue.id)}
-                            />
-                          )}
-                        </For>
-                      </div>
-                    </div>
-                  )
-                }}
-              </For>
-            </div>
-          </div>
-        </div>
-      </Show>
-
-      {/* Mode 2 & 3: Single-Pane Discussion OR Dual-Pane (Left Discussion + Right Real Session) */}
-      <Show when={taskboard.viewMode() === "discussion" || taskboard.viewMode() === "split"}>
-        <div
-          data-slot="taskboard-discussion-split-container"
-          class="flex size-full min-h-0 min-w-0 flex-1 flex-row overflow-hidden px-[var(--shell-inline-inset,8px)] pb-[var(--shell-bottom-inset,8px)] pt-[var(--shell-top-inset,8px)]"
-        >
-          {/* Left Pane: @多Agent Requirement Discussion Room */}
-          <section
-            data-slot="taskboard-discussion-pane"
-            style={{
-              flex:
-                taskboard.viewMode() === "split"
-                  ? `${taskboard.splitRatio()} 1 0%`
-                  : "1 1 0%",
-            }}
-            class="flex h-full min-h-0 min-w-0 flex-col overflow-hidden rounded-[10px] border border-v2-border-border-base/80 bg-v2-background-bg-base"
-          >
-            <DiscussionRoomPane
-              onOpenIssueDrawer={(issueId) => setDrawerIssueId(issueId)}
-              onOpenCreateModal={() => openCreateModal("backlog")}
-            />
-          </section>
-
-          {/* Resizer + Right Pane: Real OpenCode Execution Session (SplitWorkbench) */}
-          <Show when={taskboard.viewMode() === "split"}>
-            <div
-              role="separator"
-              aria-orientation="vertical"
-              data-slot="taskboard-split-resizer"
-              onPointerDown={handleSplitResizerPointerDown}
-              onDblClick={() => taskboard.setSplitRatio(0.46)}
-              class="group/tbresizer relative z-10 flex h-full w-2 shrink-0 cursor-col-resize items-center justify-center select-none"
-            >
-              <div class="h-12 w-1 rounded-full bg-v2-border-border-base/60 transition-all group-hover/tbresizer:h-24 group-hover/tbresizer:bg-v2-background-bg-accent" />
-            </div>
-
-            <section
-              data-slot="taskboard-execution-pane"
-              style={{
-                flex: `${Math.max(0.25, 1 - taskboard.splitRatio())} 1 0%`,
-              }}
-              class="flex h-full min-h-0 min-w-0 flex-col overflow-hidden rounded-[10px] border border-v2-border-border-base/80 bg-v2-background-bg-base"
-            >
-              <ExecutionRightPaneHeader />
-              <div
-                class="relative flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden"
-                style={{
-                  "--shell-inline-inset": "0px",
-                  "--shell-top-inset": "0px",
-                  "--shell-bottom-inset": "0px",
-                }}
-              >
-                {props.children}
-              </div>
-            </section>
-          </Show>
-        </div>
-      </Show>
-
-      {/* Issue Detail & Session Binding Drawer */}
-      <Show when={drawerIssue()}>
-        {(issue) => (
-          <IssueDetailDrawer
-            issue={issue()}
-            onClose={() => setDrawerIssueId(null)}
+        {/* Create New Issue Modal */}
+        <Show when={createModalOpen()}>
+          <CreateIssueModal
+            defaultColumn={createDefaultCol()}
+            onClose={() => setCreateModalOpen(false)}
           />
-        )}
-      </Show>
-
-      {/* Create New Issue Modal */}
-      <Show when={createModalOpen()}>
-        <CreateIssueModal
-          defaultColumn={createDefaultCol()}
-          onClose={() => setCreateModalOpen(false)}
-        />
-      </Show>
+        </Show>
       </div>
     </Show>
   )
@@ -428,50 +312,15 @@ function TaskboardHeaderBar(props: { onOpenCreate: () => void }) {
   return (
     <header class="flex h-11 shrink-0 items-center justify-between gap-3 border-b border-v2-border-border-base/70 bg-v2-background-bg-layer-02/50 px-4">
       <div class="flex min-w-0 items-center gap-3">
-        <div class="flex items-center gap-1 rounded-lg border border-v2-border-border-base/75 bg-v2-background-bg-deep/60 p-0.5">
-          <button
-            type="button"
-            data-action="taskboard-mode-board"
-            onClick={() => taskboard.openBoard()}
-            class="rounded-md px-2.5 py-1 text-[12px] leading-4 transition-colors"
-            classList={{
-              "bg-v2-overlay-simple-overlay-pressed text-v2-text-text-base [font-weight:560]":
-                taskboard.viewMode() === "board",
-              "text-v2-text-text-muted hover:text-v2-text-text-base": taskboard.viewMode() !== "board",
-            }}
-          >
-            📋 项目看板
-          </button>
-          <button
-            type="button"
-            data-action="taskboard-mode-discussion"
-            onClick={() => taskboard.openDiscussion()}
-            class="rounded-md px-2.5 py-1 text-[12px] leading-4 transition-colors"
-            classList={{
-              "bg-v2-overlay-simple-overlay-pressed text-v2-text-text-base [font-weight:560]":
-                taskboard.viewMode() === "discussion",
-              "text-v2-text-text-muted hover:text-v2-text-text-base": taskboard.viewMode() !== "discussion",
-            }}
-          >
-            💬 需求讨论 (@多Agent)
-          </button>
-          <button
-            type="button"
-            data-action="taskboard-mode-split"
-            onClick={() => taskboard.openSplit()}
-            class="rounded-md px-2.5 py-1 text-[12px] leading-4 transition-colors"
-            classList={{
-              "bg-v2-overlay-simple-overlay-pressed text-v2-text-text-base [font-weight:560]":
-                taskboard.viewMode() === "split",
-              "text-v2-text-text-muted hover:text-v2-text-text-base": taskboard.viewMode() !== "split",
-            }}
-          >
-            🪟 双屏联动 (左讨论 + 右执行)
-          </button>
+        <div class="flex items-center gap-2">
+          <Icon name="checklist" size="small" class="text-v2-icon-icon-muted" />
+          <span class="text-[13px] [font-weight:600] text-v2-text-text-base">
+            项目 Issue 看板 · 会话绑定
+          </span>
         </div>
 
         <span class="hidden truncate text-[12px] text-v2-text-text-faint xl:inline">
-          拖拽或点击卡片流转状态 · 讨论结论仅自动填入右侧输入框，由您确认后手动发送
+          拖拽卡片流转状态 · 支持一键绑定现有会话或新建绑定会话（仅预填输入框，绝不自动发送）
         </span>
       </div>
 
@@ -504,17 +353,17 @@ function TaskboardHeaderBar(props: { onOpenCreate: () => void }) {
           onClick={() => taskboard.openSessions()}
           class="flex h-7 items-center rounded-lg border border-v2-border-border-base/80 px-2.5 text-[12px] text-v2-text-text-muted transition-colors hover:bg-v2-overlay-simple-overlay-hover hover:text-v2-text-text-base"
         >
-          返回纯会话
+          返回会话
         </button>
 
         <button
           type="button"
           data-action="taskboard-disable-module"
           onClick={() => taskboard.setEnabled(false)}
-          class="flex h-7 items-center rounded-lg border border-v2-border-border-base/80 px-2.5 text-[12px] text-v2-state-fg-danger transition-colors hover:bg-v2-overlay-simple-overlay-hover"
-          title="关闭并隐藏看板与讨论模块（后续可按 ⌘⇧K 重新开启）"
+          class="flex h-7 items-center rounded-lg border border-v2-border-border-base/80 px-2.5 text-[12px] text-v2-text-text-muted transition-colors hover:bg-v2-overlay-simple-overlay-hover hover:text-v2-state-fg-danger"
+          title="隐藏侧栏看板入口（后续可按 ⌘⇧K 随时重新打开）"
         >
-          停用模块 (⌘⇧K)
+          隐藏入口 (⌘⇧K)
         </button>
       </div>
     </header>
@@ -525,8 +374,6 @@ function KanbanIssueCard(props: {
   issue: TaskboardIssue
   onSelect: () => void
   onDragStart: () => void
-  onOpenDiscussion: () => void
-  onOpenSplit: () => void
 }) {
   const taskboard = useTaskboard()
 
@@ -544,7 +391,14 @@ function KanbanIssueCard(props: {
       },
   )
 
-  const resolvedCount = createMemo(() => props.issue.discussionThreads.filter((t) => t.resolved).length)
+  const boundIds = createMemo(() => {
+    const ids = new Set<string>(props.issue.boundSessionIds)
+    if (props.issue.executionSessionId) ids.add(props.issue.executionSessionId)
+    if (props.issue.discussionSessionId) ids.add(props.issue.discussionSessionId)
+    return [...ids]
+  })
+
+  const primarySessionId = createMemo(() => boundIds()[0])
 
   return (
     <div
@@ -557,7 +411,9 @@ function KanbanIssueCard(props: {
     >
       <div class="flex items-center justify-between gap-2">
         <div class="flex items-center gap-1.5">
-          <span class="font-mono text-[12px] [font-weight:600] text-v2-text-text-base">{props.issue.id}</span>
+          <span class="font-mono text-[12px] [font-weight:600] text-v2-text-text-base">
+            {props.issue.id}
+          </span>
           <span class="rounded bg-v2-overlay-simple-overlay-hover px-1.5 py-0.25 font-mono text-[10px] leading-3 text-v2-text-text-muted">
             {props.issue.priority}
           </span>
@@ -567,18 +423,30 @@ function KanbanIssueCard(props: {
         </span>
       </div>
 
-      <div class="text-[13px] leading-[18px] [font-weight:540] text-v2-text-text-base">{props.issue.title}</div>
+      <div class="text-[13px] leading-[18px] [font-weight:540] text-v2-text-text-base">
+        {props.issue.title}
+      </div>
+
+      <Show when={props.issue.description.trim()}>
+        <p class="line-clamp-2 text-[11px] leading-4 text-v2-text-text-muted">
+          {props.issue.description}
+        </p>
+      </Show>
 
       <div class="flex flex-wrap items-center gap-1.5">
-        <span class="rounded border border-purple-500/25 bg-purple-500/10 px-1.5 py-0.5 text-[11px] leading-3 text-purple-300">
-          💬 {props.issue.discussionThreads.length} 讨论 · {resolvedCount()} 结论
-        </span>
         <span class="max-w-[160px] truncate rounded border border-emerald-500/25 bg-emerald-500/10 px-1.5 py-0.5 font-mono text-[11px] leading-3 text-emerald-300">
           🌿 {props.issue.worktree}
         </span>
-        <Show when={props.issue.executionSessionId}>
-          <span class="rounded bg-blue-500/15 px-1.5 py-0.5 font-mono text-[10px] leading-3 text-blue-300">
-            ⚡ 已绑定会话
+        <Show
+          when={boundIds().length > 0}
+          fallback={
+            <span class="rounded bg-v2-overlay-simple-overlay-hover px-1.5 py-0.5 text-[10px] leading-3 text-v2-text-text-faint">
+              未绑定会话
+            </span>
+          }
+        >
+          <span class="rounded border border-indigo-500/30 bg-indigo-500/15 px-1.5 py-0.5 font-mono text-[10px] leading-3 text-indigo-300">
+            🔗 已绑定 {boundIds().length} 个会话
           </span>
         </Show>
       </div>
@@ -587,659 +455,93 @@ function KanbanIssueCard(props: {
         class="flex items-center gap-1.5 border-t border-v2-border-border-base/60 pt-2"
         onClick={(e) => e.stopPropagation()}
       >
-        <button
-          type="button"
-          data-action={`card-open-discussion-${props.issue.id}`}
-          onClick={props.onOpenDiscussion}
-          class="flex-1 rounded-md border border-v2-border-border-base/70 bg-v2-background-bg-deep/60 px-2 py-1 text-[11px] [font-weight:520] text-v2-text-text-base transition-colors hover:bg-v2-overlay-simple-overlay-hover"
-        >
-          💬 @多Agent 讨论
-        </button>
-        <button
-          type="button"
-          data-action={`card-open-split-${props.issue.id}`}
-          onClick={props.onOpenSplit}
-          class="flex-1 rounded-md bg-v2-background-bg-accent/20 px-2 py-1 text-[11px] [font-weight:540] text-v2-text-text-base ring-1 ring-inset ring-v2-background-bg-accent/40 transition-colors hover:bg-v2-background-bg-accent/30"
-        >
-          🪟 双屏联动执行
-        </button>
-      </div>
-    </div>
-  )
-}
-
-function DiscussionRoomPane(props: {
-  onOpenIssueDrawer: (issueId: string) => void
-  onOpenCreateModal: () => void
-}) {
-  const taskboard = useTaskboard()
-
-  const [contextPreviewOpen, setContextPreviewOpen] = createSignal(false)
-  const [mentionPopoverOpen, setMentionPopoverOpen] = createSignal(false)
-  const [mentionTab, setMentionTab] = createSignal<"agent" | "member">("agent")
-  const [addingCustomAgent, setAddingCustomAgent] = createSignal(false)
-  const [customAgentId, setCustomAgentId] = createSignal("")
-  const [customAgentRole, setCustomAgentRole] = createSignal("")
-  const [customAgentDesc, setCustomAgentDesc] = createSignal("")
-  const [composerText, setComposerText] = createSignal("")
-
-  let textareaRef: HTMLTextAreaElement | undefined
-
-  const issue = createMemo(() => taskboard.activeIssue())
-  const resolvedCount = createMemo(
-    () => issue()?.discussionThreads.filter((t) => t.resolved).length ?? 0,
-  )
-
-  const currentAgentProfile = createMemo(() => {
-    const target = taskboard.targetAgent()
-    return (
-      taskboard.availableAgents().find((a) => a.id.toLowerCase() === target.toLowerCase()) ??
-      taskboard.availableAgents()[0]
-    )
-  })
-
-  const selectAgentFromMention = (agentId: string) => {
-    taskboard.setTargetAgent(agentId)
-    const stripped = composerText().replace(/^@[a-zA-Z0-9_-]+\s*/, "")
-    setComposerText(`@${agentId} ${stripped}`)
-    setMentionPopoverOpen(false)
-    textareaRef?.focus()
-  }
-
-  const handleComposerInput = (value: string) => {
-    setComposerText(value)
-    if (value.endsWith("@")) {
-      setMentionPopoverOpen(true)
-    }
-    const match = value.match(/^@([a-zA-Z0-9_-]+)\b/)
-    if (match) {
-      const found = taskboard
-        .availableAgents()
-        .find((a) => a.id.toLowerCase() === match[1]!.toLowerCase())
-      if (found) {
-        taskboard.setTargetAgent(found.id)
-      }
-    }
-  }
-
-  const submitMessage = async () => {
-    const text = composerText().trim()
-    if (!text) return
-    setComposerText("")
-    setMentionPopoverOpen(false)
-    await taskboard.sendDiscussionMessage(text)
-  }
-
-  const submitCustomAgent = () => {
-    const id = customAgentId().trim().replace(/^@/, "")
-    if (!id) return
-    taskboard.addCustomAgent({
-      id,
-      name: `@${id} · ${customAgentRole().trim() || "自定义角色"}`,
-      roleLabel: customAgentRole().trim() || "自定义 Agent",
-      description: customAgentDesc().trim() || "自定义需求讨论与评审角色",
-      mode: "subagent",
-    })
-    setCustomAgentId("")
-    setCustomAgentRole("")
-    setCustomAgentDesc("")
-    setAddingCustomAgent(false)
-    selectAgentFromMention(id)
-  }
-
-  return (
-    <div class="flex size-full min-h-0 min-w-0 flex-1 flex-col overflow-hidden">
-      {/* Discussion Header */}
-      <header class="flex h-11 shrink-0 items-center justify-between gap-2 border-b border-v2-border-border-base/75 bg-v2-background-bg-layer-02/60 px-3.5">
-        <div class="flex min-w-0 items-center gap-2">
-          <button
-            type="button"
-            onClick={() => taskboard.openBoard()}
-            class="rounded-md border border-v2-border-border-base/75 bg-v2-background-bg-base px-2 py-1 text-[11px] text-v2-text-text-muted transition-colors hover:text-v2-text-text-base"
-            title="返回项目 Issue 看板"
-          >
-            ← 看板
-          </button>
-
-          <select
-            aria-label="切换当前讨论的 Issue"
-            data-slot="discussion-issue-selector"
-            value={issue()?.id ?? ""}
-            onChange={(e) => taskboard.setActiveIssueId(e.currentTarget.value)}
-            class="h-7 max-w-[260px] truncate rounded-lg border border-v2-border-border-base/80 bg-v2-background-bg-base px-2 text-[12px] [font-weight:560] text-v2-text-text-base focus:outline-none"
-          >
-            <For each={taskboard.state().issues}>
-              {(item) => (
-                <option value={item.id}>
-                  {item.id} · {item.title}
-                </option>
-              )}
-            </For>
-          </select>
-
-          <Show when={issue()}>
-            {(cur) => (
-              <button
-                type="button"
-                onClick={() => props.onOpenIssueDrawer(cur().id)}
-                class="hidden rounded px-2 py-0.5 text-[11px] text-v2-text-text-muted hover:bg-v2-overlay-simple-overlay-hover hover:text-v2-text-text-base md:inline-block"
-              >
-                详情与验收标准
-              </button>
-            )}
-          </Show>
-        </div>
-
-        <div class="flex shrink-0 items-center gap-1.5">
-          <button
-            type="button"
-            data-action="discussion-toggle-context-preview"
-            onClick={() => setContextPreviewOpen((v) => !v)}
-            class="flex h-7 items-center gap-1 rounded-lg border border-v2-border-border-base/80 bg-v2-background-bg-base px-2.5 text-[11px] text-v2-text-text-base transition-colors hover:bg-v2-overlay-simple-overlay-hover"
-          >
-            <span>🧠 上下文折叠</span>
-            <span class="rounded bg-emerald-500/20 px-1.5 py-0.25 font-mono text-[10px] text-emerald-300">
-              {resolvedCount()} 结论
-            </span>
-          </button>
-
-          <Show
-            when={taskboard.viewMode() === "split"}
-            fallback={
-              <button
-                type="button"
-                data-action="discussion-spawn-execution"
-                disabled={taskboard.busySessionCreation()}
-                onClick={() => void taskboard.spawnOrOpenExecutionSession(issue()?.id)}
-                class="flex h-7 items-center gap-1 rounded-lg bg-v2-background-bg-accent px-2.5 text-[11px] [font-weight:560] text-white transition-opacity hover:opacity-90 disabled:opacity-50"
-              >
-                <span>⚡ 绑定并右屏打开执行会话</span>
-              </button>
-            }
-          >
-            <button
-              type="button"
-              data-action="discussion-maximize-single"
-              onClick={() => taskboard.openDiscussion(issue()?.id)}
-              class="flex h-7 items-center rounded-lg border border-v2-border-border-base/80 bg-v2-background-bg-base px-2 text-[11px] text-v2-text-text-muted hover:text-v2-text-text-base"
-              title="收起右侧分屏，全屏查看需求讨论"
-            >
-              单屏讨论
-            </button>
-          </Show>
-        </div>
-      </header>
-
-      {/* Role Switcher Roster Bar */}
-      <div class="flex shrink-0 flex-wrap items-center justify-between gap-2 border-b border-v2-border-border-base/60 bg-v2-background-bg-deep/40 px-3.5 py-1.5 text-[11px]">
-        <div class="flex flex-wrap items-center gap-1.5">
-          <span class="text-v2-text-text-faint">点名切换角色：</span>
-          <For each={taskboard.availableAgents()}>
-            {(agent) => (
-              <button
-                type="button"
-                data-action={`roster-agent-${agent.id}`}
-                onClick={() => selectAgentFromMention(agent.id)}
-                class={`rounded-full border px-2 py-0.5 text-[11px] leading-3 transition-opacity hover:opacity-90 ${agent.badgeClass}`}
-                classList={{
-                  "ring-1 ring-white/50 [font-weight:580]":
-                    taskboard.targetAgent().toLowerCase() === agent.id.toLowerCase(),
-                }}
-              >
-                @{agent.id} · {agent.roleLabel}
-              </button>
-            )}
-          </For>
-        </div>
-      </div>
-
-      {/* Collapsible <discussion_context> XML Preview Drawer */}
-      <Show when={contextPreviewOpen() && issue()}>
-        {(cur) => (
-          <div
-            data-slot="discussion-context-preview"
-            class="shrink-0 space-y-1.5 border-b border-purple-500/30 bg-purple-950/15 px-3.5 py-2.5 text-[11px]"
-          >
-            <div class="flex items-center justify-between">
-              <span class="font-semibold text-purple-300">
-                🔍 Qoder 同款 `&lt;discussion_context&gt;` 增量与折叠结论预览
-              </span>
-              <div class="flex items-center gap-2">
-                <button
-                  type="button"
-                  onClick={() => void taskboard.injectConclusionsToExecutionSession(cur().id)}
-                  class="rounded bg-emerald-600 px-2 py-0.5 text-[11px] text-white hover:bg-emerald-500"
-                >
-                  📝 填入右侧输入框 (手动发送)
-                </button>
-                <button
-                  type="button"
-                  onClick={() => setContextPreviewOpen(false)}
-                  class="text-v2-text-text-muted hover:text-v2-text-text-base"
-                >
-                  ✕
-                </button>
-              </div>
-            </div>
-            <pre class="max-h-36 overflow-x-auto whitespace-pre-wrap rounded-lg border border-v2-border-border-base/80 bg-v2-background-bg-deep/80 p-2 font-mono text-[11px] text-emerald-300">
-              {buildDiscussionContextXml(cur(), "delta")}
-            </pre>
-          </div>
-        )}
-      </Show>
-
-      {/* Discussion Threads Stream */}
-      <div data-slot="discussion-thread-list" class="flex-1 space-y-3 overflow-y-auto p-3.5">
         <Show
-          when={issue() && (issue()!.discussionThreads.length > 0)}
+          when={primarySessionId()}
           fallback={
-            <div class="rounded-xl border border-dashed border-v2-border-border-base/80 p-6 text-center">
-              <div class="text-[13px] [font-weight:560] text-v2-text-text-base">
-                当前议题 ({issue()?.id}) 暂无讨论记录
-              </div>
-              <p class="mt-1 text-[12px] text-v2-text-text-muted">
-                在下方点击或输入 <span class="font-mono text-amber-300">@plan</span>、
-                <span class="font-mono text-purple-300">@reviewer</span>、
-                <span class="font-mono text-blue-300">@build</span> 即可在单会话内点名不同 Agent 讨论，并将定稿方案标为结论。
-              </p>
-            </div>
+            <>
+              <button
+                type="button"
+                data-action={`card-bind-active-${props.issue.id}`}
+                onClick={() => taskboard.bindActiveSessionToIssue(props.issue.id)}
+                class="flex-1 rounded-md border border-v2-border-border-base/70 bg-v2-background-bg-deep/60 px-2 py-1 text-[11px] [font-weight:520] text-v2-text-text-base transition-colors hover:bg-v2-overlay-simple-overlay-hover"
+                title="将当前正在查看的会话绑定到此 Issue"
+              >
+                🔗 绑定当前会话
+              </button>
+              <button
+                type="button"
+                data-action={`card-spawn-session-${props.issue.id}`}
+                disabled={taskboard.busySessionCreation()}
+                onClick={() =>
+                  void taskboard.spawnOrOpenExecutionSession(props.issue.id, {
+                    forceNewSession: true,
+                    sendContextPrompt: true,
+                  })
+                }
+                class="flex-1 rounded-md bg-v2-background-bg-accent/20 px-2 py-1 text-[11px] [font-weight:540] text-v2-text-text-base ring-1 ring-inset ring-v2-background-bg-accent/40 transition-colors hover:bg-v2-background-bg-accent/30 disabled:opacity-50"
+                title="新建一个绑定会话并将需求填入输入框（不自动发送）"
+              >
+                + 新建绑定会话
+              </button>
+            </>
           }
         >
-          <For each={issue()!.discussionThreads}>
-            {(thread) => {
-              const agentObj = createMemo(
-                () =>
-                  taskboard
-                    .availableAgents()
-                    .find((a) => a.id.toLowerCase() === thread.targetAgent.toLowerCase()) ?? {
-                    id: thread.targetAgent,
-                    name: `@${thread.targetAgent}`,
-                    roleLabel: "Agent",
-                    badgeClass: "bg-blue-500/15 text-blue-300 border-blue-500/35",
-                  },
-              )
-
-              return (
-                <div
-                  data-slot="discussion-thread-card"
-                  data-thread-id={thread.id}
-                  data-resolved={thread.resolved ? "true" : undefined}
-                  class="space-y-2.5 rounded-xl border p-3.5 transition-colors"
-                  classList={{
-                    "border-emerald-500/40 bg-emerald-950/10": thread.resolved,
-                    "border-v2-border-border-base/75 bg-v2-background-bg-deep/45": !thread.resolved,
-                  }}
-                >
-                  <div class="flex flex-wrap items-center justify-between gap-2">
-                    <div class="flex items-center gap-1.5">
-                      <span class="rounded bg-v2-overlay-simple-overlay-hover px-2 py-0.5 text-[11px] [font-weight:540] text-v2-text-text-base">
-                        👤 {thread.author}
-                      </span>
-                      <span class="text-[11px] text-v2-text-text-faint">→</span>
-                      <span class={`rounded border px-2 py-0.5 text-[11px] leading-3 ${agentObj().badgeClass}`}>
-                        {agentObj().name}
-                      </span>
-                    </div>
-
-                    <button
-                      type="button"
-                      data-action={`thread-resolve-${thread.id}`}
-                      onClick={() => taskboard.toggleThreadResolved(issue()!.id, thread.id)}
-                      class="rounded-md border px-2.5 py-1 text-[11px] [font-weight:540] transition-colors"
-                      classList={{
-                        "border-emerald-500/45 bg-emerald-500/20 text-emerald-300": thread.resolved,
-                        "border-v2-border-border-base/80 bg-v2-background-bg-base text-v2-text-text-base hover:bg-v2-overlay-simple-overlay-hover":
-                          !thread.resolved,
-                      }}
-                    >
-                      {thread.resolved ? "✅ 已标为结论并折叠 (点击展开)" : "📌 标为结论并折叠 (Resolve & Fold)"}
-                    </button>
-                  </div>
-
-                  <div class="border-l-2 border-v2-background-bg-accent/70 pl-2.5 text-[12px] [font-weight:540] text-v2-text-text-base">
-                    {thread.question}
-                  </div>
-
-                  <Show
-                    when={thread.resolved}
-                    fallback={
-                      <div class="space-y-2 border-l border-v2-border-border-base/70 pl-3">
-                        <For each={thread.replies}>
-                          {(reply) => (
-                            <div class="space-y-1 rounded-lg border border-v2-border-border-base/60 bg-v2-background-bg-base/80 p-2.5">
-                              <div class="flex items-center justify-between">
-                                <span class="font-mono text-[11px] [font-weight:560] text-v2-text-text-muted">
-                                  @{reply.agent}
-                                </span>
-                                <span class="font-mono text-[10px] text-v2-text-text-faint">
-                                  switchAgent(&quot;{reply.agent}&quot;)
-                                </span>
-                              </div>
-                              <div class="whitespace-pre-line text-[12px] leading-[18px] text-v2-text-text-base">
-                                {reply.text}
-                              </div>
-                            </div>
-                          )}
-                        </For>
-                      </div>
-                    }
-                  >
-                    <div class="space-y-1.5 rounded-lg border border-emerald-500/35 bg-emerald-500/10 p-2.5">
-                      <div class="text-[11px] [font-weight:580] text-emerald-300">
-                        🎯 已收敛结论（省去中间辩论过程，自动进入 &lt;discussion_context&gt;）：
-                      </div>
-                      <input
-                        type="text"
-                        value={thread.conclusion}
-                        onInput={(e) =>
-                          taskboard.updateThreadConclusion(issue()!.id, thread.id, e.currentTarget.value)
-                        }
-                        class="w-full rounded border border-emerald-500/30 bg-v2-background-bg-base/80 px-2 py-1 text-[12px] text-v2-text-text-base focus:outline-none"
-                      />
-                    </div>
-                  </Show>
-                </div>
-              )
-            }}
-          </For>
-        </Show>
-      </div>
-
-      {/* Bottom Composer with Qoder-style @Agent Popover */}
-      <div class="relative shrink-0 border-t border-v2-border-border-base/80 bg-v2-background-bg-layer-02/70 p-3">
-        <Show when={mentionPopoverOpen()}>
-          <div
-            data-slot="taskboard-mention-popover"
-            class="absolute bottom-28 left-3 z-30 w-80 overflow-hidden rounded-xl border border-v2-border-border-strong bg-v2-background-bg-base shadow-2xl"
-          >
-            <div class="flex items-center justify-between border-b border-v2-border-border-base/70 bg-v2-background-bg-deep/70 px-3 py-2">
-              <div class="flex items-center gap-1">
-                <button
-                  type="button"
-                  data-action="mention-tab-agent"
-                  onClick={() => setMentionTab("agent")}
-                  class="rounded px-2.5 py-1 text-[11px] [font-weight:560] transition-colors"
-                  classList={{
-                    "bg-v2-background-bg-accent text-white": mentionTab() === "agent",
-                    "text-v2-text-text-muted hover:text-v2-text-text-base": mentionTab() !== "agent",
-                  }}
-                >
-                  Agent ({taskboard.availableAgents().length})
-                </button>
-                <button
-                  type="button"
-                  data-action="mention-tab-member"
-                  onClick={() => setMentionTab("member")}
-                  class="rounded px-2.5 py-1 text-[11px] [font-weight:560] transition-colors"
-                  classList={{
-                    "bg-v2-background-bg-accent text-white": mentionTab() === "member",
-                    "text-v2-text-text-muted hover:text-v2-text-text-base": mentionTab() !== "member",
-                  }}
-                >
-                  成员
-                </button>
-              </div>
+          {(sid) => (
+            <>
               <button
                 type="button"
-                onClick={() => setMentionPopoverOpen(false)}
-                class="text-[11px] text-v2-text-text-muted hover:text-v2-text-text-base"
+                data-action={`card-open-session-${props.issue.id}`}
+                onClick={() => void taskboard.openBoundSession(props.issue.id, sid())}
+                class="flex-1 rounded-md bg-indigo-500/20 px-2 py-1 text-[11px] [font-weight:540] text-indigo-300 ring-1 ring-inset ring-indigo-500/35 transition-colors hover:bg-indigo-500/30"
+                title="跳转到已绑定的会话"
               >
-                ✕
+                ⚡ 跳转绑定会话
               </button>
-            </div>
-
-            <Show when={mentionTab() === "agent"}>
-              <div class="max-h-56 space-y-1 overflow-y-auto p-1.5">
-                <For each={taskboard.availableAgents()}>
-                  {(agent) => (
-                    <button
-                      type="button"
-                      data-action={`select-mention-agent-${agent.id}`}
-                      onClick={() => selectAgentFromMention(agent.id)}
-                      class="flex w-full items-start gap-2.5 rounded-lg p-2 text-start transition-colors hover:bg-v2-overlay-simple-overlay-hover"
-                    >
-                      <span
-                        class={`flex size-7 shrink-0 items-center justify-center rounded-lg border font-mono text-[11px] [font-weight:600] uppercase ${agent.badgeClass}`}
-                      >
-                        {agent.id.slice(0, 2)}
-                      </span>
-                      <div class="min-w-0 flex-1">
-                        <div class="flex items-center justify-between gap-1">
-                          <span class="truncate text-[12px] [font-weight:560] text-v2-text-text-base">
-                            {agent.name}
-                          </span>
-                          <span class="shrink-0 font-mono text-[10px] text-v2-text-text-faint">
-                            {agent.roleLabel}
-                          </span>
-                        </div>
-                        <p class="truncate text-[11px] text-v2-text-text-muted">{agent.description}</p>
-                      </div>
-                    </button>
-                  )}
-                </For>
-              </div>
-            </Show>
-
-            <Show when={mentionTab() === "member"}>
-              <div class="space-y-1 p-1.5">
-                <button
-                  type="button"
-                  onClick={() => {
-                    setComposerText((prev) => `@老板(Cocoyu) ${prev}`)
-                    setMentionPopoverOpen(false)
-                    textareaRef?.focus()
-                  }}
-                  class="flex w-full items-center gap-2.5 rounded-lg p-2 text-start hover:bg-v2-overlay-simple-overlay-hover"
-                >
-                  <span class="flex size-7 items-center justify-center rounded-full bg-emerald-500/20 text-[11px] [font-weight:600] text-emerald-300">
-                    C
-                  </span>
-                  <div>
-                    <div class="text-[12px] [font-weight:560] text-v2-text-text-base">老板 (Cocoyu)</div>
-                    <div class="text-[11px] text-v2-text-text-muted">项目 Owner · 需求拍板</div>
-                  </div>
-                </button>
-              </div>
-            </Show>
-
-            <div class="border-t border-v2-border-border-base/70 bg-v2-background-bg-deep/80 p-2">
-              <Show
-                when={addingCustomAgent()}
-                fallback={
-                  <button
-                    type="button"
-                    data-action="open-add-custom-agent"
-                    onClick={() => setAddingCustomAgent(true)}
-                    class="flex w-full items-center justify-center gap-1 rounded-md border border-dashed border-v2-border-border-strong py-1.5 text-[11px] text-v2-text-text-base hover:bg-v2-overlay-simple-overlay-hover"
-                  >
-                    <span>+ 添加自定义 Agent</span>
-                  </button>
+              <button
+                type="button"
+                data-action={`card-split-session-${props.issue.id}`}
+                onClick={() =>
+                  void taskboard.openBoundSession(props.issue.id, sid(), { inSplitPane: true })
                 }
+                class="rounded-md border border-v2-border-border-base/70 bg-v2-background-bg-deep/60 px-2 py-1 text-[11px] text-v2-text-text-base transition-colors hover:bg-v2-overlay-simple-overlay-hover"
+                title="在原生分屏中打开该绑定会话"
               >
-                <div class="space-y-1.5">
-                  <div class="flex gap-1.5">
-                    <input
-                      type="text"
-                      placeholder="标识 (如 security)"
-                      value={customAgentId()}
-                      onInput={(e) => setCustomAgentId(e.currentTarget.value)}
-                      class="h-7 flex-1 rounded border border-v2-border-border-base bg-v2-background-bg-base px-2 text-[11px] text-v2-text-text-base"
-                    />
-                    <input
-                      type="text"
-                      placeholder="头衔 (如 安全审计)"
-                      value={customAgentRole()}
-                      onInput={(e) => setCustomAgentRole(e.currentTarget.value)}
-                      class="h-7 flex-1 rounded border border-v2-border-border-base bg-v2-background-bg-base px-2 text-[11px] text-v2-text-text-base"
-                    />
-                  </div>
-                  <input
-                    type="text"
-                    placeholder="职责描述..."
-                    value={customAgentDesc()}
-                    onInput={(e) => setCustomAgentDesc(e.currentTarget.value)}
-                    class="h-7 w-full rounded border border-v2-border-border-base bg-v2-background-bg-base px-2 text-[11px] text-v2-text-text-base"
-                  />
-                  <div class="flex justify-end gap-1.5">
-                    <button
-                      type="button"
-                      onClick={() => setAddingCustomAgent(false)}
-                      class="rounded px-2 py-1 text-[11px] text-v2-text-text-muted"
-                    >
-                      取消
-                    </button>
-                    <button
-                      type="button"
-                      data-action="submit-custom-agent"
-                      onClick={submitCustomAgent}
-                      class="rounded bg-v2-background-bg-accent px-2.5 py-1 text-[11px] text-white"
-                    >
-                      保存并 @提及
-                    </button>
-                  </div>
-                </div>
-              </Show>
-            </div>
-          </div>
-        </Show>
-
-        <div class="mb-2 flex items-center justify-between gap-2">
-          <div class="flex items-center gap-2">
-            <button
-              type="button"
-              data-action="discussion-open-mention-popover"
-              onClick={() => setMentionPopoverOpen((v) => !v)}
-              class="rounded-md border border-v2-border-border-base/80 bg-v2-background-bg-base px-2 py-0.5 text-[11px] [font-weight:540] text-v2-text-text-base transition-colors hover:bg-v2-overlay-simple-overlay-hover"
-            >
-              @ 提及切换 Agent
-            </button>
-            <Show when={currentAgentProfile()}>
-              {(prof) => (
-                <span class={`rounded border px-2 py-0.5 text-[11px] leading-3 ${prof().badgeClass}`}>
-                  当前响应：{prof().name}
-                </span>
-              )}
-            </Show>
-          </div>
-
-          <div class="flex items-center gap-1.5 text-[11px]">
-            <span class="text-v2-text-text-faint">投递：</span>
-            <select
-              value={taskboard.deliveryMode()}
-              onChange={(e) =>
-                taskboard.setDeliveryMode(e.currentTarget.value === "steer" ? "steer" : "queue")
-              }
-              class="h-6 rounded border border-v2-border-border-base/80 bg-v2-background-bg-base px-1.5 text-[11px] text-v2-text-text-base"
-            >
-              <option value="queue">queue (排队回复)</option>
-              <option value="steer">steer (立即转向)</option>
-            </select>
-          </div>
-        </div>
-
-        <div class="flex gap-2">
-          <textarea
-            ref={textareaRef}
-            rows={2}
-            data-slot="discussion-composer-input"
-            placeholder="输入 @ 唤起 Agent 菜单，例如：@reviewer 审一下边界风险，或 @plan 拆解实施步骤..."
-            value={composerText()}
-            onInput={(e) => handleComposerInput(e.currentTarget.value)}
-            onKeyDown={(e) => {
-              if (e.key === "Enter" && !e.shiftKey) {
-                e.preventDefault()
-                void submitMessage()
-              } else if (e.key === "Escape") {
-                setMentionPopoverOpen(false)
-              }
-            }}
-            class="flex-1 resize-none rounded-lg border border-v2-border-border-base/80 bg-v2-background-bg-base p-2 text-[12px] text-v2-text-text-base placeholder:text-v2-text-text-faint focus:border-v2-border-border-focus focus:outline-none"
-          />
-          <button
-            type="button"
-            data-action="discussion-send-message"
-            onClick={() => void submitMessage()}
-            class="shrink-0 rounded-lg bg-v2-background-bg-accent px-3.5 text-[12px] [font-weight:560] text-white transition-opacity hover:opacity-90"
-          >
-            发送 ↵
-          </button>
-        </div>
-      </div>
-    </div>
-  )
-}
-
-function ExecutionRightPaneHeader() {
-  const taskboard = useTaskboard()
-  const issue = createMemo(() => taskboard.activeIssue())
-  const resolvedCount = createMemo(
-    () => issue()?.discussionThreads.filter((t) => t.resolved).length ?? 0,
-  )
-
-  return (
-    <header
-      data-slot="taskboard-execution-pane-header"
-      class="flex h-11 shrink-0 items-center justify-between gap-2 border-b border-v2-border-border-base/75 bg-v2-background-bg-layer-02/60 px-3.5"
-    >
-      <div class="flex min-w-0 items-center gap-2">
-        <span class="shrink-0 rounded border border-emerald-500/35 bg-emerald-500/15 px-2 py-0.5 text-[11px] [font-weight:580] text-emerald-300">
-          ⚡ 绑定执行会话
-        </span>
-        <Show when={issue()}>
-          {(cur) => (
-            <>
-              <span class="font-mono text-[12px] [font-weight:600] text-v2-text-text-base">{cur().id}</span>
-              <span class="truncate text-[12px] text-v2-text-text-muted">{cur().title}</span>
-              <span class="hidden rounded border border-v2-border-border-base/70 bg-v2-background-bg-deep/60 px-1.5 py-0.5 font-mono text-[10px] text-v2-text-text-faint lg:inline-block">
-                🌿 {cur().worktree}
-              </span>
+                🪟 分屏
+              </button>
+              <button
+                type="button"
+                data-action={`card-fill-session-${props.issue.id}`}
+                onClick={() =>
+                  void taskboard.openBoundSession(props.issue.id, sid(), { fillComposer: true })
+                }
+                class="rounded-md border border-v2-border-border-base/70 bg-v2-background-bg-deep/60 px-2 py-1 text-[11px] text-v2-text-text-base transition-colors hover:bg-v2-overlay-simple-overlay-hover"
+                title="打开该会话并将 Issue 需求填入输入框（不自动发送）"
+              >
+                📝 填输入框
+              </button>
             </>
           )}
         </Show>
       </div>
-
-      <div class="flex shrink-0 items-center gap-1.5">
-        <button
-          type="button"
-          data-action="split-exec-inject-conclusions"
-          onClick={() => void taskboard.injectConclusionsToExecutionSession(issue()?.id)}
-          class="rounded-md border border-v2-border-border-base/80 bg-v2-background-bg-base px-2 py-1 text-[11px] text-v2-text-text-base transition-colors hover:bg-v2-overlay-simple-overlay-hover"
-          title="将左屏讨论室已折叠的结论填入当前右侧会话输入框（不自动发送）"
-        >
-          📝 填入 {resolvedCount()} 条结论到输入框
-        </button>
-
-        <button
-          type="button"
-          data-action="split-exec-new-session"
-          disabled={taskboard.busySessionCreation()}
-          onClick={() =>
-            void taskboard.spawnOrOpenExecutionSession(issue()?.id, {
-              forceNewSession: true,
-              sendContextPrompt: true,
-            })
-          }
-          class="rounded-md border border-v2-border-border-base/80 bg-v2-background-bg-base px-2 py-1 text-[11px] text-v2-text-text-muted transition-colors hover:text-v2-text-text-base disabled:opacity-50"
-          title="为当前 Issue 新建并绑定一个独立执行会话"
-        >
-          + 新建绑定会话
-        </button>
-
-        <button
-          type="button"
-          data-action="split-exec-sync-board"
-          onClick={() => void taskboard.syncExecutionProgressToIssue(issue()?.id, "review")}
-          class="rounded-md bg-v2-background-bg-accent px-2.5 py-1 text-[11px] [font-weight:560] text-white transition-opacity hover:opacity-90"
-        >
-          📤 回写看板
-        </button>
-      </div>
-    </header>
+    </div>
   )
 }
 
 function IssueDetailDrawer(props: { issue: TaskboardIssue; onClose: () => void }) {
   const taskboard = useTaskboard()
+  const [selectedSessionToBind, setSelectedSessionToBind] = createSignal("")
+
+  const boundSessionIds = createMemo(() => {
+    const ids = new Set<string>(props.issue.boundSessionIds)
+    if (props.issue.executionSessionId) ids.add(props.issue.executionSessionId)
+    if (props.issue.discussionSessionId) ids.add(props.issue.discussionSessionId)
+    return [...ids]
+  })
+
+  const unboundRecentSessions = createMemo(() => {
+    const bound = new Set(boundSessionIds())
+    return taskboard.recentSessions().filter((s) => !bound.has(s.id))
+  })
 
   return (
     <div
@@ -1254,7 +556,10 @@ function IssueDetailDrawer(props: { issue: TaskboardIssue; onClose: () => void }
           <select
             value={props.issue.status}
             onChange={(e) =>
-              taskboard.updateIssueStatus(props.issue.id, e.currentTarget.value as TaskboardColumnId)
+              taskboard.updateIssueStatus(
+                props.issue.id,
+                e.currentTarget.value as TaskboardColumnId,
+              )
             }
             class="h-7 rounded border border-v2-border-border-base bg-v2-background-bg-deep/60 px-2 text-[12px] text-v2-text-text-base"
           >
@@ -1278,7 +583,9 @@ function IssueDetailDrawer(props: { issue: TaskboardIssue; onClose: () => void }
           <input
             type="text"
             value={props.issue.title}
-            onInput={(e) => taskboard.updateIssueDetails(props.issue.id, { title: e.currentTarget.value })}
+            onInput={(e) =>
+              taskboard.updateIssueDetails(props.issue.id, { title: e.currentTarget.value })
+            }
             class="h-8 w-full rounded-lg border border-v2-border-border-base bg-v2-background-bg-deep/50 px-2.5 text-[12px] [font-weight:540] text-v2-text-text-base focus:outline-none"
           />
         </div>
@@ -1306,7 +613,9 @@ function IssueDetailDrawer(props: { issue: TaskboardIssue; onClose: () => void }
             <select
               value={props.issue.assigneeAgent}
               onChange={(e) =>
-                taskboard.updateIssueDetails(props.issue.id, { assigneeAgent: e.currentTarget.value })
+                taskboard.updateIssueDetails(props.issue.id, {
+                  assigneeAgent: e.currentTarget.value,
+                })
               }
               class="h-8 w-full rounded-lg border border-v2-border-border-base bg-v2-background-bg-deep/50 px-2 text-[12px] text-v2-text-text-base"
             >
@@ -1318,8 +627,20 @@ function IssueDetailDrawer(props: { issue: TaskboardIssue; onClose: () => void }
         </div>
 
         <div>
+          <label class="mb-1 block text-[11px] text-v2-text-text-muted">Worktree / 分支标识</label>
+          <input
+            type="text"
+            value={props.issue.worktree}
+            onInput={(e) =>
+              taskboard.updateIssueDetails(props.issue.id, { worktree: e.currentTarget.value })
+            }
+            class="h-8 w-full rounded-lg border border-v2-border-border-base bg-v2-background-bg-deep/50 px-2.5 font-mono text-[12px] text-v2-text-text-base focus:outline-none"
+          />
+        </div>
+
+        <div>
           <label class="mb-1 block text-[11px] text-v2-text-text-muted">
-            需求描述与验收标准 (自动进入 &lt;discussion_context&gt;)
+            需求描述与验收标准（支持一键填入绑定会话输入框）
           </label>
           <textarea
             rows={4}
@@ -1331,56 +652,158 @@ function IssueDetailDrawer(props: { issue: TaskboardIssue; onClose: () => void }
           />
         </div>
 
-        <div class="space-y-2 rounded-xl border border-purple-500/30 bg-purple-950/15 p-3">
+        {/* Session Binding Management Section */}
+        <div class="space-y-2.5 rounded-xl border border-indigo-500/30 bg-indigo-950/15 p-3">
           <div class="flex items-center justify-between text-[12px]">
-            <span class="[font-weight:560] text-purple-300">💬 需求讨论室 (@多Agent)</span>
-            <span class="font-mono text-[11px] text-emerald-300">
-              {props.issue.discussionThreads.filter((t) => t.resolved).length} 条已收敛结论
+            <span class="[font-weight:580] text-indigo-300">🔗 关联会话管理 (Session Binding)</span>
+            <span class="font-mono text-[11px] text-indigo-300">
+              {boundSessionIds().length} 个已绑定
             </span>
           </div>
-          <button
-            type="button"
-            onClick={() => {
-              props.onClose()
-              taskboard.openDiscussion(props.issue.id)
-            }}
-            class="w-full rounded-lg bg-purple-600 py-1.5 text-[12px] [font-weight:560] text-white hover:bg-purple-500"
-          >
-            💬 进入需求讨论室 (@多Agent)
-          </button>
-        </div>
 
-        <div class="space-y-2 rounded-xl border border-emerald-500/30 bg-emerald-950/15 p-3">
-          <div class="flex items-center justify-between text-[12px]">
-            <span class="[font-weight:560] text-emerald-300">⚡ 绑定编码执行会话 (Worktree)</span>
-            <span class="font-mono text-[11px] text-emerald-400">{props.issue.worktree}</span>
-          </div>
-          <div class="flex gap-2">
+          <Show
+            when={boundSessionIds().length > 0}
+            fallback={
+              <div class="rounded-lg border border-dashed border-v2-border-border-base/70 p-2.5 text-center text-[11px] text-v2-text-text-muted">
+                暂未绑定任何会话。您可以在下方一键绑定当前会话、从列表选择已有会话，或直接新建绑定会话。
+              </div>
+            }
+          >
+            <div class="space-y-1.5">
+              <For each={boundSessionIds()}>
+                {(sid) => (
+                  <div class="flex items-center justify-between gap-2 rounded-lg border border-v2-border-border-base/70 bg-v2-background-bg-base/80 px-2.5 py-1.5 text-[11px]">
+                    <div class="min-w-0 flex-1">
+                      <div class="truncate [font-weight:540] text-v2-text-text-base">
+                        {taskboard.getSessionTitle(sid)}
+                      </div>
+                      <div class="truncate font-mono text-[10px] text-v2-text-text-faint">
+                        {sid}
+                      </div>
+                    </div>
+                    <div class="flex shrink-0 items-center gap-1">
+                      <button
+                        type="button"
+                        onClick={() => {
+                          props.onClose()
+                          void taskboard.openBoundSession(props.issue.id, sid)
+                        }}
+                        class="rounded bg-indigo-500/20 px-1.5 py-0.5 text-[11px] text-indigo-300 hover:bg-indigo-500/30"
+                      >
+                        跳转
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          props.onClose()
+                          void taskboard.openBoundSession(props.issue.id, sid, {
+                            inSplitPane: true,
+                          })
+                        }}
+                        class="rounded border border-v2-border-border-base px-1.5 py-0.5 text-[11px] text-v2-text-text-base hover:bg-v2-overlay-simple-overlay-hover"
+                      >
+                        分屏
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          props.onClose()
+                          void taskboard.openBoundSession(props.issue.id, sid, {
+                            fillComposer: true,
+                          })
+                        }}
+                        class="rounded border border-v2-border-border-base px-1.5 py-0.5 text-[11px] text-v2-text-text-base hover:bg-v2-overlay-simple-overlay-hover"
+                        title="填入输入框（不自动发送）"
+                      >
+                        填输入框
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => taskboard.unbindSessionFromIssue(props.issue.id, sid)}
+                        class="rounded px-1.5 py-0.5 text-[11px] text-v2-state-fg-danger hover:bg-v2-overlay-simple-overlay-hover"
+                      >
+                        解绑
+                      </button>
+                    </div>
+                  </div>
+                )}
+              </For>
+            </div>
+          </Show>
+
+          <div class="flex gap-1.5 pt-1">
+            <select
+              aria-label="选择已有会话进行绑定"
+              value={selectedSessionToBind()}
+              onChange={(e) => setSelectedSessionToBind(e.currentTarget.value)}
+              class="h-7 min-w-0 flex-1 rounded-lg border border-v2-border-border-base bg-v2-background-bg-base px-2 text-[11px] text-v2-text-text-base"
+            >
+              <option value="">选择已有会话绑定到此 Issue...</option>
+              <For each={unboundRecentSessions()}>
+                {(s) => <option value={s.id}>{s.title}</option>}
+              </For>
+            </select>
             <button
               type="button"
+              disabled={!selectedSessionToBind()}
               onClick={() => {
-                props.onClose()
-                void taskboard.spawnOrOpenExecutionSession(props.issue.id)
+                const sid = selectedSessionToBind()
+                if (!sid) return
+                const found = taskboard.recentSessions().find((s) => s.id === sid)
+                taskboard.bindExistingSessionToIssue(
+                  props.issue.id,
+                  sid,
+                  "execution",
+                  undefined,
+                  found?.directory,
+                )
+                setSelectedSessionToBind("")
               }}
-              class="flex-1 rounded-lg bg-emerald-600 py-1.5 text-[12px] [font-weight:560] text-white hover:bg-emerald-500"
+              class="shrink-0 rounded-lg border border-v2-border-border-base bg-v2-background-bg-base px-2.5 text-[11px] text-v2-text-text-base hover:bg-v2-overlay-simple-overlay-hover disabled:opacity-40"
             >
-              🪟 左讨论 + 右执行双屏打开
+              绑定所选
+            </button>
+          </div>
+
+          <div class="grid grid-cols-2 gap-1.5 pt-1">
+            <button
+              type="button"
+              onClick={() => taskboard.bindActiveSessionToIssue(props.issue.id)}
+              class="rounded-lg border border-v2-border-border-base bg-v2-background-bg-base py-1.5 text-[11px] [font-weight:540] text-v2-text-text-base hover:bg-v2-overlay-simple-overlay-hover"
+            >
+              🔗 绑定当前打开会话
             </button>
             <button
               type="button"
+              disabled={taskboard.busySessionCreation()}
               onClick={() => {
                 props.onClose()
                 void taskboard.spawnOrOpenExecutionSession(props.issue.id, {
                   forceNewSession: true,
-                  createNewWorktree: true,
                   sendContextPrompt: true,
                 })
               }}
-              class="rounded-lg border border-v2-border-border-base bg-v2-background-bg-base px-2.5 py-1.5 text-[11px] text-v2-text-text-base hover:bg-v2-overlay-simple-overlay-hover"
+              class="rounded-lg bg-indigo-600 py-1.5 text-[11px] [font-weight:560] text-white hover:bg-indigo-500 disabled:opacity-50"
             >
-              + 建 Worktree 会话
+              + 新建绑定会话 (填输入框)
             </button>
           </div>
+
+          <button
+            type="button"
+            disabled={taskboard.busySessionCreation()}
+            onClick={() => {
+              props.onClose()
+              void taskboard.spawnOrOpenExecutionSession(props.issue.id, {
+                forceNewSession: true,
+                createNewWorktree: true,
+                sendContextPrompt: true,
+              })
+            }}
+            class="w-full rounded-lg border border-emerald-500/35 bg-emerald-500/15 py-1.5 text-[11px] [font-weight:540] text-emerald-300 hover:bg-emerald-500/25 disabled:opacity-50"
+          >
+            🌿 新建独立 Worktree 并创建绑定会话 (填输入框)
+          </button>
         </div>
       </div>
 
@@ -1415,18 +838,18 @@ function CreateIssueModal(props: { defaultColumn: TaskboardColumnId; onClose: ()
   const [desc, setDesc] = createSignal("")
   const [col, setCol] = createSignal<TaskboardColumnId>(props.defaultColumn)
   const [priority, setPriority] = createSignal<TaskboardPriority>("P1")
-  const [agent, setAgent] = createSignal("plan")
+  const [agent, setAgent] = createSignal("build")
 
-  const submit = (openDiscussionImmediately: boolean) => {
+  const submit = (bindActiveSession: boolean) => {
     taskboard.createIssue(
       {
-        title: title().trim() || "支持将需求讨论结论一键同步到执行会话",
+        title: title().trim() || "未命名需求议题",
         description: desc(),
         status: col(),
         priority: priority(),
         assigneeAgent: agent(),
       },
-      { openDiscussionImmediately },
+      { bindActiveSession },
     )
     props.onClose()
   }
@@ -1443,7 +866,7 @@ function CreateIssueModal(props: { defaultColumn: TaskboardColumnId; onClose: ()
       >
         <div class="flex items-center justify-between border-b border-v2-border-border-base/80 px-4 py-3">
           <span class="text-[13px] [font-weight:580] text-v2-text-text-base">
-            ➕ 新建 OpenCode Issue (支持直接拉起 @多Agent 讨论室)
+            ➕ 新建项目 Issue
           </span>
           <button
             type="button"
@@ -1460,7 +883,7 @@ function CreateIssueModal(props: { defaultColumn: TaskboardColumnId; onClose: ()
             <input
               type="text"
               data-slot="create-issue-title"
-              placeholder="例如：为 SessionSidebar 增加按关联 Issue 过滤会话能力"
+              placeholder="例如：抽离纯 Issue 看板并支持多会话绑定与跳转"
               value={title()}
               onInput={(e) => setTitle(e.currentTarget.value)}
               class="h-9 w-full rounded-lg border border-v2-border-border-base bg-v2-background-bg-deep/50 px-3 text-[12px] text-v2-text-text-base focus:outline-none"
@@ -1469,7 +892,7 @@ function CreateIssueModal(props: { defaultColumn: TaskboardColumnId; onClose: ()
 
           <div>
             <label class="mb-1 block text-[11px] text-v2-text-text-muted">
-              需求背景与验收标准 (可留给 @plan 与 @reviewer 协同补充)
+              需求背景与验收标准（后续可一键填入绑定会话输入框）
             </label>
             <textarea
               rows={3}
@@ -1509,7 +932,7 @@ function CreateIssueModal(props: { defaultColumn: TaskboardColumnId; onClose: ()
             </div>
 
             <div>
-              <label class="mb-1 block text-[11px] text-v2-text-text-muted">主责 Agent</label>
+              <label class="mb-1 block text-[11px] text-v2-text-text-muted">负责 Agent</label>
               <select
                 value={agent()}
                 onChange={(e) => setAgent(e.currentTarget.value)}
@@ -1533,11 +956,11 @@ function CreateIssueModal(props: { defaultColumn: TaskboardColumnId; onClose: ()
           </button>
           <button
             type="button"
-            data-action="submit-issue-and-discuss"
+            data-action="submit-issue-and-bind"
             onClick={() => submit(true)}
-            class="rounded-lg bg-purple-600 px-3 py-1.5 text-[12px] [font-weight:560] text-white hover:bg-purple-500"
+            class="rounded-lg bg-indigo-600 px-3 py-1.5 text-[12px] [font-weight:560] text-white hover:bg-indigo-500"
           >
-            创建并进入 @多Agent 讨论
+            创建并绑定当前会话
           </button>
           <button
             type="button"

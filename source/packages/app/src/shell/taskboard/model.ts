@@ -142,7 +142,7 @@ export type TaskboardState = typeof TaskboardPersistedSchema.Type
 export function createDefaultTaskboardState(): TaskboardState {
   const now = 1761446400000
   return {
-    enabled: false,
+    enabled: true,
     viewMode: "sessions",
     activeIssueId: "OC-101",
     targetAgent: "plan",
@@ -582,6 +582,38 @@ export function buildExecutionPromptFromIssue(issue: TaskboardIssue, extraInstru
     extraInstruction?.trim() ||
     `请根据上述议题 (${issue.id}: ${issue.title}) 与已收敛的讨论结论开始实施代码修改，并在完成后运行相关验证。`
   return `${xml}\n\n${tail}`
+}
+
+export function buildIssueComposerDraft(issue: TaskboardIssue): string {
+  const lines = [
+    `[${issue.id}] ${issue.title}（优先级：${issue.priority}）`,
+    ...(issue.description.trim() ? ["", "需求描述与验收标准：", issue.description.trim()] : []),
+  ]
+  return lines.join("\n")
+}
+
+export function unbindSessionFromIssue(
+  state: TaskboardState,
+  issueId: string,
+  sessionId: string,
+): TaskboardState {
+  const now = Date.now()
+  return {
+    ...state,
+    issues: state.issues.map((issue) => {
+      if (issue.id !== issueId) return issue
+      const remaining = issue.boundSessionIds.filter((id) => id !== sessionId)
+      return {
+        ...issue,
+        executionSessionId:
+          issue.executionSessionId === sessionId ? remaining[0] : issue.executionSessionId,
+        discussionSessionId:
+          issue.discussionSessionId === sessionId ? undefined : issue.discussionSessionId,
+        boundSessionIds: remaining,
+        updatedAt: now,
+      }
+    }),
+  }
 }
 
 export function bindSessionToIssue(

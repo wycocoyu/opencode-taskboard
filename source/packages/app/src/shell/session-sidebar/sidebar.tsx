@@ -699,12 +699,39 @@ function ServerSessions(props: {
       <>
         <Show when={taskboard?.enabled() && boundIssue()}>
           {(match) => (
-            <Menu.Item onSelect={() => taskboard!.openSplit(match().issue.id)}>
-              <span class="flex items-center gap-2 text-indigo-400">
-                <Icon name="window-analytics" size="small" />
-                <span>双屏联动打开 {match().issue.id}</span>
-              </span>
-            </Menu.Item>
+            <>
+              <Menu.Item
+                onSelect={() => {
+                  taskboard!.setActiveIssueId(match().issue.id)
+                  taskboard!.openBoard()
+                }}
+              >
+                <span class="flex items-center gap-2 text-indigo-400">
+                  <Icon name="checklist" size="small" />
+                  <span>在看板中查看 {match().issue.id}</span>
+                </span>
+              </Menu.Item>
+              <Menu.Item
+                onSelect={() =>
+                  void taskboard!.openBoundSession(match().issue.id, row.session.id, {
+                    fillComposer: true,
+                  })
+                }
+              >
+                <span class="flex items-center gap-2">
+                  <Icon name="pencil-line" size="small" class="text-v2-icon-icon-muted" />
+                  <span>填入 {match().issue.id} 需求到输入框</span>
+                </span>
+              </Menu.Item>
+              <Menu.Item
+                onSelect={() => taskboard!.unbindSessionFromIssue(match().issue.id, row.session.id)}
+              >
+                <span class="flex items-center gap-2 text-v2-text-text-muted">
+                  <Icon name="close" size="small" />
+                  <span>解除与 {match().issue.id} 的绑定</span>
+                </span>
+              </Menu.Item>
+            </>
           )}
         </Show>
         <Show when={taskboard?.enabled() && !boundIssue() && taskboard.activeIssue()}>
