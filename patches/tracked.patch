@@ -1,492 +1,217 @@
-diff --git a/packages/app/e2e/regression/tabs.spec.ts b/packages/app/e2e/regression/tabs.spec.ts
-index 9d1c75a..b41949a 100644
---- a/packages/app/e2e/regression/tabs.spec.ts
-+++ b/packages/app/e2e/regression/tabs.spec.ts
-@@ -24,6 +24,137 @@ const c = { id: "ses_tab_c", title: "Tab C session" }
+diff --git a/packages/app/src/composer/adapter.ts b/packages/app/src/composer/adapter.ts
+index 6f37355..a27a26d 100644
+--- a/packages/app/src/composer/adapter.ts
++++ b/packages/app/src/composer/adapter.ts
+@@ -9,7 +9,7 @@ import type { createComposerSubmission } from "./submission-state"
  
- test.use({ serviceWorkers: "block" })
+ export type ComposerControls = {
+   agents: {
+-    available: { name: string; hidden?: boolean; mode: string }[]
++    available: { name: string; description?: string; hidden?: boolean; mode: string }[]
+     options: string[]
+     current: string
+     visible: boolean
+diff --git a/packages/app/src/composer/attachments/attachments.ts b/packages/app/src/composer/attachments/attachments.ts
+index 5cc33dc..363a10b 100644
+--- a/packages/app/src/composer/attachments/attachments.ts
++++ b/packages/app/src/composer/attachments/attachments.ts
+@@ -3,6 +3,8 @@ import { createStore } from "solid-js/store"
+ import { makeEventListener } from "@solid-primitives/event-listener"
+ import { createBlobReference } from "@/runtime/persistence/drafts"
+ import { uuid } from "@/runtime/persistence/uuid"
++import { useSplitPane } from "@/shell/split-view/context"
++import { hasSessionDragMime } from "@/shell/split-view/workbench"
+ import type { ComposerPrompt } from "../types"
+ import type { ImageAttachmentPart, PathAttachmentPart } from "../state"
+ import type { AttachmentDestination } from "./destination"
+@@ -40,6 +42,8 @@ export function createComposerAttachments(
+     setDraggingType: (type: "image" | "@mention" | null) => void
+   },
+ ) {
++  const splitPane = useSplitPane()
++
+   const clearDrag = () => {
+     input.setDraggingType(null)
+   }
+@@ -201,6 +205,8 @@ export function createComposerAttachments(
  
-+test("session sidebar groups history and restores the original tab layout", async ({ page }) => {
-+  const permission = {
-+    id: "permission-sidebar",
-+    sessionID: b.id,
-+    action: "shell",
-+    resources: ["git status"],
-+    metadata: {},
-+    save: [],
-+  }
-+  const requests = [permission]
-+  const workspace = await openSession(page, {
-+    name: "Sidebar",
-+    sessions: [a, b, { ...c, time: { created: 1, updated: 2, idle: 2 } }],
-+    sessionID: a.id,
-+    sessionStatus: { [b.id]: { type: "busy" } },
-+    permissions: () => requests,
-+    sessionPermissions: { [b.id]: requests },
-+    seed: {
-+      tabs: [a.id],
-+      settings: { appearance: { tabLayout: "vertical" } },
-+      storage: { "opencode.global.dat:session-sidebar.v1": { enabled: true } },
-+    },
+   const handleDrop = async (event: DragEvent) => {
+     if (input.isDialogActive()) return
++    if (hasSessionDragMime(event.dataTransfer)) return
++    if (splitPane && splitPane.count() > 1 && !splitPane.containsTarget(event.target)) return
+     event.preventDefault()
+     clearDrag()
+     const plainText = event.dataTransfer?.getData("text/plain")
+@@ -224,6 +230,11 @@ export function createComposerAttachments(
+     if (cancel) onCleanup(cancel)
+     makeEventListener(document, "dragover", (event) => {
+       if (input.isDialogActive()) return
++      if (hasSessionDragMime(event.dataTransfer)) return
++      if (splitPane && splitPane.count() > 1 && !splitPane.containsTarget(event.target)) {
++        clearDrag()
++        return
++      }
+       event.preventDefault()
+ 
+       if (event.dataTransfer?.types.includes("Files")) input.setDraggingType("image")
+diff --git a/packages/app/src/composer/model.ts b/packages/app/src/composer/model.ts
+index e19b4a7..fd64922 100644
+--- a/packages/app/src/composer/model.ts
++++ b/packages/app/src/composer/model.ts
+@@ -205,11 +205,12 @@ export function createComposerModel(adapter: ComposerAdapter, options?: { queue?
+     })),
+     ...adapter
+       .controls()
+-      .agents.available.filter((agent) => !agent.hidden && agent.mode !== "primary")
++      .agents.available.filter((agent) => !agent.hidden)
+       .map((agent) => ({
+         id: `agent:${agent.name}`,
+         kind: "agent" as const,
+         label: `@${agent.name}`,
++        description: agent.description,
+         mention: { type: "agent" as const, name: agent.name, content: `@${agent.name}`, start: 0, end: 0 },
+       })),
+     ...recent().map((path) => ({
+diff --git a/packages/app/src/composer/submit.test.ts b/packages/app/src/composer/submit.test.ts
+index 85bb7ca..15ff30e 100644
+--- a/packages/app/src/composer/submit.test.ts
++++ b/packages/app/src/composer/submit.test.ts
+@@ -642,4 +642,50 @@ describe("Composer submission", () => {
+     expect(calls).toEqual([])
+     expect(state.current().some((part) => part.type === "image")).toBe(true)
+   })
++
++  test("switches session agent when a primary agent is @-mentioned (case-insensitive) and excludes primary agents from subagent list", async () => {
++    const state = createMemoryComposerState().capture()
++    const text = "@Plan @reviewer inspect architecture"
++    state.set([
++      { type: "agent", name: "Plan", content: "@Plan", start: 0, end: 5 },
++      { type: "text", content: " ", start: 5, end: 6 },
++      { type: "agent", name: "reviewer", content: "@reviewer", start: 6, end: 15 },
++      { type: "text", content: " inspect architecture", start: 15, end: text.length },
++    ])
++
++    const calls: string[] = []
++    const admitted = Promise.withResolvers<Parameters<ComposerSession["data"]["session"]["prompt"]>[0]>()
++    let selectedAgent = "build"
++
++    const target = session({
++      calls,
++      current: () => ({ agent: "build", model: { id: "model-1", providerID: "provider-1", variant: "balanced" } }),
++      prompt: async (value) => admitted.resolve(value),
++    })
++
++    const ctl = (): ComposerControls => ({
++      agents: {
++        available: [
++          { name: "build", mode: "primary" },
++          { name: "plan", mode: "primary" },
++          { name: "reviewer", mode: "subagent" },
++        ],
++        options: ["build", "plan"],
++        current: selectedAgent,
++        visible: true,
++        select(name) {
++          if (name) selectedAgent = name
++        },
++      },
++      model: { selection, paid: true, loading: false },
++    })
++
++    await submitInput(active(state, target, ctl)).submit(new Event("submit"))
++    const request = await admitted.promise
++
++    expect(selectedAgent).toBe("plan")
++    expect(request.metadata?.agent).toBe("plan")
++    expect(calls).toContain("switch-agent")
++    expect((request.agents ?? []).map((a) => a.name)).toEqual(["reviewer"])
 +  })
-+
-+  const sidebar = page.getByRole("complementary", { name: "Sessions", exact: true })
-+  await expect(page.locator("[data-titlebar-tab-slot]:visible")).toHaveCount(0)
-+  await expect(sidebar.getByRole("heading", { name: "Needs input", exact: true })).toBeVisible()
-+  await expect(sidebar.getByRole("heading", { name: "Idle", exact: true })).toBeVisible()
-+  await expect(sidebar.getByRole("heading", { name: "Ready to review", exact: true })).toHaveCount(0)
-+  await expect(sidebar.locator('[data-slot="session-sidebar-unread-dot"]')).toHaveCount(1)
-+  await expect(sidebar.getByRole("button", { name: /Tab B session/ })).toBeVisible()
-+
-+  const viewRequest = page.waitForRequest(
-+    (request) =>
-+      request.method() === "POST" && new URL(request.url()).pathname === `/api/session/${c.id}/view`,
-+  )
-+  await sidebar.locator('[data-action="sidebar-filter-menu"]').click()
-+  await page.getByRole("menuitem", { name: "Mark all as read", exact: true }).click()
-+  await viewRequest
-+  await expect(sidebar.locator('[data-slot="session-sidebar-unread-dot"]')).toHaveCount(0)
-+  const newer = { ...permission, id: "permission-sidebar-newer" }
-+  requests.push(newer)
-+  await workspace.push([
-+    {
-+      id: "evt_sidebar_permission_asked",
-+      type: "permission.asked",
-+      created: Date.now(),
-+      location: { directory: workspace.directory },
-+      data: newer,
-+    },
-+  ])
-+  requests.splice(requests.indexOf(newer), 1)
-+  const refreshedRequests = page.waitForResponse(
-+    (response) =>
-+      response.request().method() === "GET" && new URL(response.url()).pathname === `/api/session/${b.id}/permission`,
-+  )
-+  await workspace.push([
-+    {
-+      id: "evt_sidebar_newer_replied",
-+      type: "permission.replied",
-+      created: Date.now(),
-+      location: { directory: workspace.directory },
-+      data: { sessionID: b.id, requestID: newer.id, reply: "once" },
-+    },
-+  ])
-+  await refreshedRequests
-+  await expect(sidebar.getByRole("heading", { name: "Needs input", exact: true })).toBeVisible()
-+  requests.splice(0)
-+  await workspace.push([
-+    {
-+      id: "evt_sidebar_permission_replied",
-+      type: "permission.replied",
-+      created: Date.now(),
-+      location: { directory: workspace.directory },
-+      data: { sessionID: b.id, requestID: permission.id, reply: "once" },
-+    },
-+  ])
-+  await expect(sidebar.getByRole("heading", { name: "Needs input", exact: true })).toHaveCount(0)
-+  await expect(sidebar.getByRole("heading", { name: "Working", exact: true })).toBeVisible()
-+
-+  const archived = workspace.sessions.find((item) => item.id === c.id)!
-+  archived.time = { ...(archived.time as Record<string, number>), archived: Date.now() }
-+  await workspace.push([
-+    {
-+      id: "evt_sidebar_archived",
-+      type: "session.archived",
-+      created: Date.now(),
-+      location: { directory: workspace.directory },
-+      data: { sessionID: c.id },
-+    },
-+  ])
-+  await expect(sidebar.getByRole("button", { name: /Tab C session/ })).toHaveCount(0)
-+  await sidebar.getByRole("combobox", { name: "Session visibility", exact: true }).selectOption("archived")
-+  await expect(sidebar.getByRole("button", { name: /Tab C session/ })).toBeVisible()
-+  await sidebar.getByRole("combobox", { name: "Session visibility", exact: true }).selectOption("active")
-+  await sidebar.getByRole("combobox", { name: "Group sessions by", exact: true }).selectOption("time")
-+  await expect(sidebar.getByRole("heading", { name: "Older", exact: true })).toBeVisible()
-+  await sidebar.getByRole("combobox", { name: "Group sessions by", exact: true }).selectOption("project")
-+  await expect(sidebar.getByRole("heading", { name: "Sidebar", exact: true })).toBeVisible()
-+
-+  // Pinning a session shows the Pinned section and persists across switches
-+  const rowBWrapper = sidebar.locator('[data-slot="session-sidebar-row-wrapper"]').filter({
-+    has: page.locator(`[data-session-id="${b.id}"]`),
-+  })
-+  await rowBWrapper.first().hover()
-+  await rowBWrapper.first().getByRole("button", { name: "Pin session", exact: true }).click()
-+  await expect(sidebar.getByRole("heading", { name: "Pinned", exact: true })).toBeVisible()
-+  const pinnedSection = sidebar.locator('[data-slot="session-sidebar-pinned"]')
-+  await expect(pinnedSection.getByRole("button", { name: /Tab B session/ })).toBeVisible()
-+  await pinnedSection.getByRole("button", { name: "Unpin session", exact: true }).click({ force: true })
-+  await expect(sidebar.getByRole("heading", { name: "Pinned", exact: true })).toHaveCount(0)
-+
-+  await sidebar.getByRole("searchbox", { name: "Search sessions", exact: true }).fill(b.title)
-+  await expect(sidebar.getByRole("button", { name: /Tab A session/ })).toHaveCount(0)
-+  await expect(sidebar.getByRole("button", { name: /Tab C session/ })).toHaveCount(0)
-+  await sidebar.getByRole("button", { name: /Tab B session/ }).click()
-+  await expectPath(page, sessionHref(b.id))
-+  await expectSessionTitle(page, b.title)
-+
-+  await sidebar.getByRole("button", { name: "Restore tabs", exact: true }).click()
-+  await expect(sidebar).toBeHidden()
-+  await expect(page.locator('[data-slot="vertical-tabs-sidebar"]')).toBeVisible()
-+  const modifier = await page.evaluate(() => (/Mac/.test(navigator.platform) ? "Meta" : "Control"))
-+  await page.keyboard.press(`${modifier}+Shift+b`)
-+  await expect(sidebar).toBeVisible()
-+  await expect(sidebar.getByRole("searchbox", { name: "Search sessions", exact: true })).toHaveValue(b.title)
-+  await page.reload()
-+  await expect(sidebar.getByRole("searchbox", { name: "Search sessions", exact: true })).toHaveValue(b.title)
-+  await expect(sidebar.getByRole("combobox", { name: "Group sessions by", exact: true })).toHaveValue("project")
-+})
-+
- test("tab strip keeps draft tabs as wide as session tabs and navigates on mouse down", async ({ page }) => {
-   const workspace = await mockWorkspace(page, {
-     name: "Tabs",
-diff --git a/packages/app/e2e/utils/app.ts b/packages/app/e2e/utils/app.ts
-index 2916bdf..b0f8ab8 100644
---- a/packages/app/e2e/utils/app.ts
-+++ b/packages/app/e2e/utils/app.ts
-@@ -103,6 +103,7 @@ function storageEntries(input: SeedInput): [string, string, boolean][] {
+ })
+diff --git a/packages/app/src/composer/submit.ts b/packages/app/src/composer/submit.ts
+index be339fd..619ae4f 100644
+--- a/packages/app/src/composer/submit.ts
++++ b/packages/app/src/composer/submit.ts
+@@ -25,6 +25,7 @@ type ComposerSubmission = {
+   images: ImageAttachmentPart[]
+   selection: ComposerSelection
+   delivery: ComposerDelivery
++  primaryAgents?: ReadonlySet<string>
+ }
+ 
+ type ComposerSubmitInput = {
+@@ -291,14 +292,35 @@ function readSubmission(
+ 
+   if (!text.trim() && !prompt.some(isAttachment) && comments === 0) return
+ 
+-  const selection = currentSelection(input)
++  const baseSelection = currentSelection(input)
+ 
+-  if (!selection) {
++  if (!baseSelection) {
+     input.notify.missingSelection()
+ 
+     return
    }
  
-   const values: Record<string, unknown> = {
-+    "opencode.global.dat:session-sidebar.v1": { enabled: false },
-     ...(Object.keys(server).length ? { "opencode.global.dat:server": server } : {}),
-     ...(input.tabs ? { "opencode.window.browser.dat:tabs": input.tabs.map(tabEntry) } : {}),
-     ...(input.panes
-diff --git a/packages/app/e2e/utils/mock-api.ts b/packages/app/e2e/utils/mock-api.ts
-index 781d78f..898dc4a 100644
---- a/packages/app/e2e/utils/mock-api.ts
-+++ b/packages/app/e2e/utils/mock-api.ts
-@@ -424,6 +424,13 @@ const Group = HttpApiGroup.make("mock")
-       success: NoContent,
-     }),
-   )
-+  .add(
-+    HttpApiEndpoint.post("sessionView", "/api/session/:sessionID/view", {
-+      params: SessionParams,
-+      payload: JsonPayload,
-+      success: NoContent,
-+    }),
++  const controls = input.adapter.controls()
++  const primaryAgentsByLower = new Map(
++    controls.agents.available
++      .filter((item) => item.mode === "primary")
++      .map((item) => [item.name.toLowerCase(), item.name] as const),
 +  )
-   .add(
-     HttpApiEndpoint.post("sessionInterrupt", "/api/session/:sessionID/interrupt", {
-       params: SessionParams,
-diff --git a/packages/app/e2e/utils/mock-server.ts b/packages/app/e2e/utils/mock-server.ts
-index 4f557aa..1180a0e 100644
---- a/packages/app/e2e/utils/mock-server.ts
-+++ b/packages/app/e2e/utils/mock-server.ts
-@@ -1339,6 +1339,16 @@ function mockHandlers(
- 
-             if (session && title !== undefined) session.title = title
-           }).pipe(Effect.andThen(noContent)),
-+        sessionView: (ctx) =>
-+          Effect.sync(() => {
-+            const session = config.sessions.find((item) => item.id === ctx.params.sessionID)
-+            const idle =
-+              Predicate.isObject(ctx.payload) && typeof ctx.payload.idle === "number" ? ctx.payload.idle : undefined
-+            if (session && idle !== undefined) {
-+              const prevTime = Predicate.isObject(session.time) ? session.time : {}
-+              session.time = { ...prevTime, viewed: idle }
-+            }
-+          }).pipe(Effect.andThen(noContent)),
-         sessionCommand: (ctx) => {
-           const recordCommand = config.onCommand
- 
-diff --git a/packages/app/src/runtime/i18n/en.ts b/packages/app/src/runtime/i18n/en.ts
-index 6ee0b5a..71d9444 100644
---- a/packages/app/src/runtime/i18n/en.ts
-+++ b/packages/app/src/runtime/i18n/en.ts
-@@ -2,6 +2,66 @@ import { DESKTOP_NATIVE_ENGLISH } from "./desktop-native"
- 
- export const dict = {
-   ...DESKTOP_NATIVE_ENGLISH,
-+  "sessionSidebar.title": "Sessions",
-+  "sessionSidebar.toggle": "Toggle session sidebar",
-+  "sessionSidebar.restore": "Restore tabs",
-+  "sessionSidebar.search": "Search sessions",
-+  "sessionSidebar.groupBy": "Group sessions by",
-+  "sessionSidebar.group.state": "By status",
-+  "sessionSidebar.group.project": "By project",
-+  "sessionSidebar.group.time": "By time",
-+  "sessionSidebar.group.none": "None",
-+  "sessionSidebar.status": "Session visibility",
-+  "sessionSidebar.active": "Active",
-+  "sessionSidebar.archived": "Archived",
-+  "sessionSidebar.archivedOnly": "Archived only",
-+  "sessionSidebar.project": "Filter by project",
-+  "sessionSidebar.allProjects": "All projects",
-+  "sessionSidebar.period": "Filter by time",
-+  "sessionSidebar.allTime": "All time",
-+  "sessionSidebar.day": "Last 24 hours",
-+  "sessionSidebar.week": "Last 7 days",
-+  "sessionSidebar.month": "Last 30 days",
-+  "sessionSidebar.sort": "Sort sessions by",
-+  "sessionSidebar.updated": "Last updated",
-+  "sessionSidebar.created": "Created",
-+  "sessionSidebar.filterMenu": "Filter and view options",
-+  "sessionSidebar.filter": "Filter",
-+  "sessionSidebar.display": "Display",
-+  "sessionSidebar.showPath": "Show project subtitle",
-+  "sessionSidebar.markAllRead": "Mark all as read",
-+  "sessionSidebar.resetFilters": "Reset filters",
-+  "sessionSidebar.pinned": "Pinned",
-+  "sessionSidebar.newInProject": "New session in {{project}}",
-+  "sessionSidebar.noServers": "No servers available",
-+  "sessionSidebar.disconnected": "Waiting for server connection…",
-+  "sessionSidebar.loading": "Loading sessions…",
-+  "sessionSidebar.failed": "Some session data could not be loaded.",
-+  "sessionSidebar.retry": "Retry",
-+  "sessionSidebar.empty": "No matching sessions",
-+  "sessionSidebar.more": "Load older sessions",
-+  "sessionSidebar.untitled": "Untitled session",
-+  "sessionSidebar.state.input": "Needs input",
-+  "sessionSidebar.state.working": "Working",
-+  "sessionSidebar.state.review": "Ready to review",
-+  "sessionSidebar.state.idle": "Idle",
-+  "sessionSidebar.time.today": "Today",
-+  "sessionSidebar.time.yesterday": "Yesterday",
-+  "sessionSidebar.time.week": "Previous 7 days",
-+  "sessionSidebar.time.month": "Previous 30 days",
-+  "sessionSidebar.time.older": "Older",
-+  "sessionSidebar.action.stop": "Stop execution",
-+  "sessionSidebar.action.pin": "Pin session",
-+  "sessionSidebar.action.unpin": "Unpin session",
-+  "sessionSidebar.action.rename": "Rename session",
-+  "sessionSidebar.action.archive": "Archive session",
-+  "sessionSidebar.action.unarchive": "Unarchive session",
-+  "sessionSidebar.action.delete": "Delete session",
-+  "sessionSidebar.action.openNewTab": "Open in new tab",
-+  "sessionSidebar.action.markRead": "Mark as read",
-+  "sessionSidebar.action.copyId": "Copy session ID",
-+  "sessionSidebar.action.copyDirectory": "Copy working directory",
-+  "sessionSidebar.action.more": "More actions",
-   "session.location.unavailable": "Session location unavailable",
-   "session.location.description": "Choose another directory to continue this session.",
-   "session.location.choose": "Choose directory",
-diff --git a/packages/app/src/runtime/i18n/zh.ts b/packages/app/src/runtime/i18n/zh.ts
-index b7d19c1..7b1bb40 100644
---- a/packages/app/src/runtime/i18n/zh.ts
-+++ b/packages/app/src/runtime/i18n/zh.ts
-@@ -3,6 +3,67 @@ import en from "./en"
- type Keys = keyof typeof en
- 
- export const dict = {
-+  "sessionSidebar.title": "会话",
-+  "sessionSidebar.toggle": "切换会话侧边栏",
-+  "sessionSidebar.restore": "恢复标签栏",
-+  "sessionSidebar.search": "搜索会话…",
-+  "sessionSidebar.groupBy": "分组方式",
-+  "sessionSidebar.group.state": "按状态",
-+  "sessionSidebar.group.project": "按项目",
-+  "sessionSidebar.group.time": "按时间",
-+  "sessionSidebar.group.none": "不分组",
-+  "sessionSidebar.status": "会话可见性",
-+  "sessionSidebar.active": "活跃",
-+  "sessionSidebar.archived": "已归档",
-+  "sessionSidebar.archivedOnly": "仅看已归档",
-+  "sessionSidebar.project": "按项目筛选",
-+  "sessionSidebar.allProjects": "全部项目",
-+  "sessionSidebar.period": "按时间筛选",
-+  "sessionSidebar.allTime": "全部时间",
-+  "sessionSidebar.day": "最近 24 小时",
-+  "sessionSidebar.week": "最近 7 天",
-+  "sessionSidebar.month": "最近 30 天",
-+  "sessionSidebar.sort": "排序方式",
-+  "sessionSidebar.updated": "最近更新",
-+  "sessionSidebar.created": "创建时间",
-+  "sessionSidebar.filterMenu": "筛选与视图选项",
-+  "sessionSidebar.filter": "筛选",
-+  "sessionSidebar.display": "显示设置",
-+  "sessionSidebar.showPath": "显示项目路径副标题",
-+  "sessionSidebar.markAllRead": "全部标为已读",
-+  "sessionSidebar.resetFilters": "重置筛选条件",
-+  "sessionSidebar.pinned": "已置顶",
-+  "sessionSidebar.newInProject": "在 {{project}} 中新建会话",
-+  "sessionSidebar.noServers": "暂无可用服务器",
-+  "sessionSidebar.disconnected": "正在等待服务器连接…",
-+  "sessionSidebar.loading": "正在加载会话…",
-+  "sessionSidebar.failed": "部分会话数据加载失败。",
-+  "sessionSidebar.retry": "重试",
-+  "sessionSidebar.empty": "没有匹配的会话",
-+  "sessionSidebar.more": "加载更早的会话",
-+  "sessionSidebar.untitled": "未命名会话",
-+  "sessionSidebar.state.input": "等待输入",
-+  "sessionSidebar.state.working": "运行中",
-+  "sessionSidebar.state.review": "待查看",
-+  "sessionSidebar.state.idle": "空闲",
-+  "sessionSidebar.time.today": "今天",
-+  "sessionSidebar.time.yesterday": "昨天",
-+  "sessionSidebar.time.week": "过去 7 天",
-+  "sessionSidebar.time.month": "过去 30 天",
-+  "sessionSidebar.time.older": "更早",
-+  "sessionSidebar.action.stop": "停止运行",
-+  "sessionSidebar.action.pin": "置顶会话",
-+  "sessionSidebar.action.unpin": "取消置顶",
-+  "sessionSidebar.action.rename": "重命名会话",
-+  "sessionSidebar.action.archive": "归档会话",
-+  "sessionSidebar.action.unarchive": "取消归档",
-+  "sessionSidebar.action.delete": "删除会话",
-+  "sessionSidebar.action.openNewTab": "在新标签页中打开",
-+  "sessionSidebar.action.markRead": "标为已读",
-+  "sessionSidebar.action.copyId": "复制会话 ID",
-+  "sessionSidebar.action.copyDirectory": "复制工作目录",
-+  "sessionSidebar.action.more": "更多操作",
++  const primaryAgents = new Set(primaryAgentsByLower.keys())
++  const mentionedPart = prompt.find(
++    (part): part is Extract<Prompt[number], { type: "agent" }> =>
++      part.type === "agent" && primaryAgentsByLower.has(part.name.toLowerCase()),
++  )
++  const mentionedPrimaryAgent = mentionedPart
++    ? primaryAgentsByLower.get(mentionedPart.name.toLowerCase())
++    : undefined
++  if (mentionedPrimaryAgent) {
++    controls.agents.select(mentionedPrimaryAgent)
++  }
++  const selection: ComposerSelection = mentionedPrimaryAgent
++    ? { ...baseSelection, agent: mentionedPrimaryAgent }
++    : baseSelection
 +
-   "desktop.menu.app": "OpenCode",
-   "desktop.menu.file": "文件",
-   "desktop.menu.edit": "编辑",
-diff --git a/packages/app/src/runtime/i18n/zht.ts b/packages/app/src/runtime/i18n/zht.ts
-index 82ab93c..79bf16f 100644
---- a/packages/app/src/runtime/i18n/zht.ts
-+++ b/packages/app/src/runtime/i18n/zht.ts
-@@ -3,6 +3,67 @@ import en from "./en"
- type Keys = keyof typeof en
+   const retry = input.adapter.state.retry.current()
  
- export const dict = {
-+  "sessionSidebar.title": "會話",
-+  "sessionSidebar.toggle": "切換會話側邊欄",
-+  "sessionSidebar.restore": "恢復分頁列",
-+  "sessionSidebar.search": "搜尋會話…",
-+  "sessionSidebar.groupBy": "分組方式",
-+  "sessionSidebar.group.state": "按狀態",
-+  "sessionSidebar.group.project": "按專案",
-+  "sessionSidebar.group.time": "按時間",
-+  "sessionSidebar.group.none": "不分組",
-+  "sessionSidebar.status": "會話可見性",
-+  "sessionSidebar.active": "活躍",
-+  "sessionSidebar.archived": "已封存",
-+  "sessionSidebar.archivedOnly": "僅看已封存",
-+  "sessionSidebar.project": "按專案篩選",
-+  "sessionSidebar.allProjects": "全部專案",
-+  "sessionSidebar.period": "按時間篩選",
-+  "sessionSidebar.allTime": "全部時間",
-+  "sessionSidebar.day": "最近 24 小時",
-+  "sessionSidebar.week": "最近 7 天",
-+  "sessionSidebar.month": "最近 30 天",
-+  "sessionSidebar.sort": "排序方式",
-+  "sessionSidebar.updated": "最近更新",
-+  "sessionSidebar.created": "建立時間",
-+  "sessionSidebar.filterMenu": "篩選與檢視選項",
-+  "sessionSidebar.filter": "篩選",
-+  "sessionSidebar.display": "顯示設定",
-+  "sessionSidebar.showPath": "顯示專案路徑副標題",
-+  "sessionSidebar.markAllRead": "全部標為已讀",
-+  "sessionSidebar.resetFilters": "重設篩選條件",
-+  "sessionSidebar.pinned": "已釘選",
-+  "sessionSidebar.newInProject": "在 {{project}} 中新增會話",
-+  "sessionSidebar.noServers": "暫無可用伺服器",
-+  "sessionSidebar.disconnected": "正在等待伺服器連線…",
-+  "sessionSidebar.loading": "正在載入會話…",
-+  "sessionSidebar.failed": "部分會話資料載入失敗。",
-+  "sessionSidebar.retry": "重試",
-+  "sessionSidebar.empty": "沒有匹配的會話",
-+  "sessionSidebar.more": "載入更早的會話",
-+  "sessionSidebar.untitled": "未命名會話",
-+  "sessionSidebar.state.input": "等待輸入",
-+  "sessionSidebar.state.working": "執行中",
-+  "sessionSidebar.state.review": "待檢視",
-+  "sessionSidebar.state.idle": "閒置",
-+  "sessionSidebar.time.today": "今天",
-+  "sessionSidebar.time.yesterday": "昨天",
-+  "sessionSidebar.time.week": "過去 7 天",
-+  "sessionSidebar.time.month": "過去 30 天",
-+  "sessionSidebar.time.older": "更早",
-+  "sessionSidebar.action.stop": "停止執行",
-+  "sessionSidebar.action.pin": "釘選會話",
-+  "sessionSidebar.action.unpin": "取消釘選",
-+  "sessionSidebar.action.rename": "重新命名會話",
-+  "sessionSidebar.action.archive": "封存會話",
-+  "sessionSidebar.action.unarchive": "取消封存",
-+  "sessionSidebar.action.delete": "刪除會話",
-+  "sessionSidebar.action.openNewTab": "在新分頁中開啟",
-+  "sessionSidebar.action.markRead": "標為已讀",
-+  "sessionSidebar.action.copyId": "複製會話 ID",
-+  "sessionSidebar.action.copyDirectory": "複製工作目錄",
-+  "sessionSidebar.action.more": "更多操作",
-+
-   "desktop.menu.app": "OpenCode",
-   "desktop.menu.file": "檔案",
-   "desktop.menu.edit": "編輯",
-diff --git a/packages/app/src/settings/model.test.ts b/packages/app/src/settings/model.test.ts
-index b83db39..d7f27ab 100644
---- a/packages/app/src/settings/model.test.ts
-+++ b/packages/app/src/settings/model.test.ts
-@@ -101,7 +101,7 @@ describe("settings schema", () => {
-       appearance: {
-         fontSize: 14,
-         mono: "",
--        sans: "",
-+        sans: "Noto Serif SC",
-         terminal: "",
-         tabLayout: "horizontal",
-       },
-@@ -146,7 +146,7 @@ describe("settings schema", () => {
-     expect(settings.appearance).toEqual({
-       fontSize: 14,
-       mono: "Custom Mono",
--      sans: "",
-+      sans: "Noto Serif SC",
-       terminal: "",
-       tabLayout: "vertical",
-     })
-@@ -186,16 +186,16 @@ describe("settings schema", () => {
+   const retryID =
+@@ -319,6 +341,7 @@ function readSubmission(
+     images,
+     selection,
+     delivery: input.delivery?.(alternate) ?? "steer",
++    primaryAgents,
+   }
+ }
+ 
+@@ -553,13 +576,20 @@ async function buildSubmissionRequest(session: ComposerSession, value: ComposerS
+     })),
+   )
+ 
+-  return buildPromptRequest({
++  const built = buildPromptRequest({
+     prompt: value.prompt,
+     context: value.context,
+     images,
+     text: value.text,
+     sessionDirectory: session.directory,
    })
- })
++
++  return {
++    ...built,
++    agents: value.primaryAgents
++      ? built.agents.filter((item) => !value.primaryAgents!.has(item.name.toLowerCase()))
++      : built.agents,
++  }
+ }
  
--test("font defaults are Inter and IBM Plex Mono", () => {
--  expect(sansDefault).toBe("Inter")
-+test("preserves the installed Noto Serif SC and IBM Plex Mono defaults", () => {
-+  expect(sansDefault).toBe("Noto Serif SC")
-   expect(monoDefault).toBe("IBM Plex Mono")
- })
- 
- test.each([
--  { name: "sans", family: sansFontFamily, font: undefined, prefix: '"Inter", ' },
--  { name: "sans", family: sansFontFamily, font: "", prefix: '"Inter", ' },
--  { name: "sans", family: sansFontFamily, font: "   ", prefix: '"Inter", ' },
--  { name: "sans", family: sansFontFamily, font: "Custom Sans", prefix: '"Custom Sans", "Inter", ' },
-+  { name: "sans", family: sansFontFamily, font: undefined, prefix: '"Noto Serif SC", "Inter", ' },
-+  { name: "sans", family: sansFontFamily, font: "", prefix: '"Noto Serif SC", "Inter", ' },
-+  { name: "sans", family: sansFontFamily, font: "   ", prefix: '"Noto Serif SC", "Inter", ' },
-+  { name: "sans", family: sansFontFamily, font: "Custom Sans", prefix: '"Custom Sans", "Noto Serif SC", "Inter", ' },
-   { name: "mono", family: monoFontFamily, font: undefined, prefix: '"IBM Plex Mono", ' },
-   { name: "mono", family: monoFontFamily, font: "", prefix: '"IBM Plex Mono", ' },
-   { name: "mono", family: monoFontFamily, font: "   ", prefix: '"IBM Plex Mono", ' },
-diff --git a/packages/app/src/settings/model.tsx b/packages/app/src/settings/model.tsx
-index 8efa301..50a45b9 100644
---- a/packages/app/src/settings/model.tsx
-+++ b/packages/app/src/settings/model.tsx
-@@ -30,14 +30,15 @@ export function projectSettingsKey(scope: ServerScope, projectID: string | undef
- 
- export const monoDefault = "IBM Plex Mono"
- 
--export const sansDefault = "Inter"
-+export const sansDefault = "Noto Serif SC"
- 
- export const terminalDefault = "JetBrainsMono Nerd Font Mono"
- 
- const monoFallback =
-   '"IBM Plex Mono", ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace'
- 
--const sansFallback = '"Inter", ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif'
-+const sansFallback =
-+  '"Noto Serif SC", "Inter", ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif'
- 
- const terminalFallback =
-   '"JetBrainsMono Nerd Font Mono", ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace'
-@@ -284,7 +285,7 @@ export const defaultSettings: Settings = {
-     terminalPlacement: "side",
-     followUpBehavior: "steer",
-   },
--  appearance: { fontSize: 14, mono: "", sans: "", terminal: "", tabLayout: "horizontal" },
-+  appearance: { fontSize: 14, mono: "", sans: "Noto Serif SC", terminal: "", tabLayout: "horizontal" },
-   keybinds: {},
-   permissions: { autoApprove: false, autoApproveProjects: {} },
-   workspaces: { defaultDestination: "last-used", lastUsed: {} },
+ function failSubmission(
 diff --git a/packages/app/src/shell/shell.tsx b/packages/app/src/shell/shell.tsx
-index 25bc495..8f54348 100644
+index 25bc495..fc9a3d4 100644
 --- a/packages/app/src/shell/shell.tsx
 +++ b/packages/app/src/shell/shell.tsx
-@@ -11,19 +11,40 @@ import { useSettingsSurface } from "@/settings/surface"
+@@ -11,85 +11,127 @@ import { useSettingsSurface } from "@/settings/surface"
  import { useSettings } from "@/settings/model"
  import { ExtensionServerCover } from "@/runtime/extension/server-shell"
  import { ExtensionSlot } from "@/runtime/extension/render"
@@ -494,6 +219,11 @@ index 25bc495..8f54348 100644
 +import { useLanguage } from "@/runtime/i18n/language"
 +import { createSidebarPreferences } from "@/shell/session-sidebar/preferences"
 +import { SessionSidebar } from "@/shell/session-sidebar/sidebar"
++import { SplitViewProvider } from "@/shell/split-view/context"
++import { SplitWorkbench } from "@/shell/split-view/workbench"
++import { RemoteControlProvider } from "@/shell/remote-control/controller"
++import { TaskboardProvider } from "@/shell/taskboard/controller"
++import { TaskboardWorkbench } from "@/shell/taskboard/view"
  
  export default function Layout(props: ParentProps) {
    const platform = usePlatform()
@@ -528,69 +258,164 @@ index 25bc495..8f54348 100644
    const bottomTitlebar = () => mobile() && preferences.general.mobileTitlebarPosition() === "bottom"
  
    return (
-@@ -45,8 +66,14 @@ export default function Layout(props: ParentProps) {
-             : "max(0px, calc(8px - var(--safe-area-inset-bottom, env(safe-area-inset-bottom, 0px))))",
-         }}
-       >
+     <TitlebarRightProvider>
+-      <div
+-        class="relative bg-v2-background-bg-deep flex-1 min-h-0 min-w-0 flex flex-col select-none [&_input]:select-text [&_textarea]:select-text [&_[contenteditable]]:select-text"
+-        style={{
+-          // Mobile panels only need clearance for their outer border.
+-          "--shell-inline-inset": mobile() ? "1px" : "8px",
+-          // A bottom mobile titlebar leaves main's top edge to the safe area. Native Windows chrome supplies the gap;
+-          // retain outer-outline clearance.
+-          "--shell-top-inset": bottomTitlebar()
+-            ? "0px"
+-            : platform.platform === "desktop" && platform.os === "windows"
+-              ? "1px"
+-              : "8px",
+-          "--shell-bottom-inset": bottomTitlebar()
+-            ? "8px"
+-            : "max(0px, calc(8px - var(--safe-area-inset-bottom, env(safe-area-inset-bottom, 0px))))",
+-        }}
+-      >
 -        <Titlebar verticalTabs={verticalTabs() ? { mount: state.tabsMount } : undefined} />
-+        <Titlebar
-+          hideSessionTabs={showSidebar()}
-+          verticalTabs={verticalTabs() ? { mount: state.tabsMount } : undefined}
-+        />
-         <div class="flex flex-1 min-h-0 min-w-0 flex-row">
-+          <Show when={showSidebar()}>
-+            <SessionSidebar filter={sidebar} setFilter={setSidebar} close={() => setSidebar("enabled", false)} />
-+          </Show>
-           <Show when={verticalTabs()}>
-             <aside
-               ref={(element) => setState("tabsMount", element)}
-diff --git a/packages/app/src/shell/titlebar/titlebar.tsx b/packages/app/src/shell/titlebar/titlebar.tsx
-index f3780f5..b7ce060 100644
---- a/packages/app/src/shell/titlebar/titlebar.tsx
-+++ b/packages/app/src/shell/titlebar/titlebar.tsx
-@@ -54,7 +54,7 @@ const macTrafficLightsTopClearance = 28
- // titlebar row stays 16px clear of it, as ChatGPT's phone header does. Without one, 8px matches the content gap below.
- const mobileTopClearance = "max(8px, min(16px, env(safe-area-inset-top, 0px) * 1000))"
- 
--export function Titlebar(props: { verticalTabs?: { mount?: HTMLElement } }) {
-+export function Titlebar(props: { hideSessionTabs?: boolean; verticalTabs?: { mount?: HTMLElement } }) {
-   const platform = usePlatform()
-   const command = useCommand()
-   const language = useLanguage()
-@@ -682,20 +682,22 @@ export function Titlebar(props: { verticalTabs?: { mount?: HTMLElement } }) {
-                     when={props.verticalTabs}
-                     fallback={
-                       <>
--                        <TitlebarTabStrip
--                          tabs={tabsStore}
--                          currentTab={currentTab()}
--                          onNavigate={(tab, el) => {
--                            tabs.select(tab)
--                            el?.scrollIntoView({ behavior: "instant" })
--                          }}
--                          onClose={(tab) => {
--                            const index = tabsStore.findIndex((item) => tabKey(item) === tabKey(tab))
--
--                            if (index !== -1) tabsStoreActions.closeTab(index)
--                          }}
--                          onReorder={(keys) => tabsStoreActions.reorder(keys)}
--                        />
-+                        <Show when={!props.hideSessionTabs}>
-+                          <TitlebarTabStrip
-+                            tabs={tabsStore}
-+                            currentTab={currentTab()}
-+                            onNavigate={(tab, el) => {
-+                              tabs.select(tab)
-+                              el?.scrollIntoView({ behavior: "instant" })
-+                            }}
-+                            onClose={(tab) => {
-+                              const index = tabsStore.findIndex((item) => tabKey(item) === tabKey(tab))
-+
-+                              if (index !== -1) tabsStoreActions.closeTab(index)
-+                            }}
-+                            onReorder={(keys) => tabsStoreActions.reorder(keys)}
-+                          />
-+                        </Show>
-                         <RecentlyClosedTabsMenu
-                           onNewTab={openNewTab}
-                           tooltip={
+-        <div class="flex flex-1 min-h-0 min-w-0 flex-row">
+-          <Show when={verticalTabs()}>
+-            <aside
+-              ref={(element) => setState("tabsMount", element)}
+-              data-slot="vertical-tabs-sidebar"
+-              class="relative flex h-full min-h-0 shrink-0 flex-col bg-v2-background-bg-deep pe-0.5 ps-2.5 pb-[var(--shell-bottom-inset,8px)] pt-[var(--shell-top-inset,8px)]"
++      <SplitViewProvider>
++        <RemoteControlProvider>
++          <TaskboardProvider>
++          <div
++            class="relative bg-v2-background-bg-deep flex-1 min-h-0 min-w-0 flex flex-col select-none [&_input]:select-text [&_textarea]:select-text [&_[contenteditable]]:select-text"
++          style={{
++            // Mobile panels only need clearance for their outer border.
++            "--shell-inline-inset": mobile() ? "1px" : "8px",
++            // A bottom mobile titlebar leaves main's top edge to the safe area. Native Windows chrome supplies the gap;
++            // retain outer-outline clearance.
++            "--shell-top-inset": bottomTitlebar()
++              ? "0px"
++              : platform.platform === "desktop" && platform.os === "windows"
++                ? "1px"
++                : "8px",
++            "--shell-bottom-inset": bottomTitlebar()
++              ? "8px"
++              : "max(0px, calc(8px - var(--safe-area-inset-bottom, env(safe-area-inset-bottom, 0px))))",
++          }}
++        >
++          <Titlebar
++            hideSessionTabs={showSidebar()}
++            verticalTabs={verticalTabs() ? { mount: state.tabsMount } : undefined}
++          />
++          <div class="flex flex-1 min-h-0 min-w-0 flex-row">
++            <Show when={showSidebar()}>
++              <SessionSidebar filter={sidebar} setFilter={setSidebar} close={() => setSidebar("enabled", false)} />
++            </Show>
++            <Show when={verticalTabs()}>
++              <aside
++                ref={(element) => setState("tabsMount", element)}
++                data-slot="vertical-tabs-sidebar"
++                class="relative flex h-full min-h-0 shrink-0 flex-col bg-v2-background-bg-deep pe-0.5 ps-2.5 pb-[var(--shell-bottom-inset,8px)] pt-[var(--shell-top-inset,8px)]"
++                style={{
++                  width: `${state.tabsWidth}px`,
++                  "padding-bottom": "max(10px, var(--safe-area-inset-bottom, env(safe-area-inset-bottom, 0px)))",
++                }}
++              >
++                <ResizeHandle
++                  class="-end-2"
++                  direction="horizontal"
++                  size={state.tabsWidth}
++                  min={140}
++                  max={520}
++                  onResize={(width) => setState("tabsWidth", width)}
++                />
++              </aside>
++            </Show>
++            {/* Size containment collapses percentage-height descendants in WebKit. */}
++            <main
++              class="flex-1 min-h-0 min-w-0 overflow-x-hidden flex flex-col items-start contain-content"
+               style={{
+-                width: `${state.tabsWidth}px`,
+-                "padding-bottom": "max(10px, var(--safe-area-inset-bottom, env(safe-area-inset-bottom, 0px)))",
++                "padding-top": bottomTitlebar() ? "env(safe-area-inset-top, 0px)" : "0px",
++                "padding-bottom":
++                  bottomTitlebar() || settings.active()
++                    ? "0px"
++                    : "var(--safe-area-inset-bottom, env(safe-area-inset-bottom, 0px))",
++                "--settings-bottom-inset": bottomTitlebar()
++                  ? "40px"
++                  : "var(--safe-area-inset-bottom, env(safe-area-inset-bottom, 0px))",
+               }}
+             >
+-              <ResizeHandle
+-                class="-end-2"
+-                direction="horizontal"
+-                size={state.tabsWidth}
+-                min={140}
+-                max={520}
+-                onResize={(width) => setState("tabsWidth", width)}
+-              />
+-            </aside>
+-          </Show>
+-          {/* Size containment collapses percentage-height descendants in WebKit. */}
+-          <main
+-            class="flex-1 min-h-0 min-w-0 overflow-x-hidden flex flex-col items-start contain-content"
+-            style={{
+-              "padding-top": bottomTitlebar() ? "env(safe-area-inset-top, 0px)" : "0px",
+-              "padding-bottom":
+-                bottomTitlebar() || settings.active()
+-                  ? "0px"
+-                  : "var(--safe-area-inset-bottom, env(safe-area-inset-bottom, 0px))",
+-              "--settings-bottom-inset": bottomTitlebar()
+-                ? "40px"
+-                : "var(--safe-area-inset-bottom, env(safe-area-inset-bottom, 0px))",
+-            }}
+-          >
+-            <ExtensionServerCover>
+-              <Suspense>{props.children}</Suspense>
+-            </ExtensionServerCover>
+-          </main>
+-        </div>
+-        <ExtensionSlot at="window.bottom" input={{}} />
+-        <ToastRegion />
+-        <UploadToastHost />
+-      </div>
++              <ExtensionServerCover>
++                <TaskboardWorkbench>
++                  <SplitWorkbench>
++                    <Suspense>{props.children}</Suspense>
++                  </SplitWorkbench>
++                </TaskboardWorkbench>
++              </ExtensionServerCover>
++            </main>
++          </div>
++            <ExtensionSlot at="window.bottom" input={{}} />
++            <ToastRegion />
++            <UploadToastHost />
++          </div>
++          </TaskboardProvider>
++        </RemoteControlProvider>
++      </SplitViewProvider>
+     </TitlebarRightProvider>
+   )
+ }
+diff --git a/packages/core/src/plugin/internal.ts b/packages/core/src/plugin/internal.ts
+index a6738a1..6f086e5 100644
+--- a/packages/core/src/plugin/internal.ts
++++ b/packages/core/src/plugin/internal.ts
+@@ -92,6 +92,7 @@ import BrowserPlugin from "@opencode/plugin-browser"
+ import { CommandPlugin } from "./command.js"
+ import { IdentityPlugin } from "./identity.js"
+ import { PlanPlugin } from "./plan.js"
++import { TaskboardPlugin } from "./taskboard.js"
+ import { ModelsDevPlugin } from "./models-dev.js"
+ import { McpCodeModeDefaultsPlugin } from "./mcp-codemode-defaults.js"
+ import { ProviderPlugins } from "./provider.js"
+@@ -223,6 +224,7 @@ const pre = [
+   VcsGitPlugin.Plugin,
+   AgentPlugin.Plugin,
+   PlanPlugin.Plugin,
++  TaskboardPlugin.Plugin,
+   CommandPlugin.Plugin,
+   SkillPlugin.Plugin,
+   VcsHgPlugin.Plugin,

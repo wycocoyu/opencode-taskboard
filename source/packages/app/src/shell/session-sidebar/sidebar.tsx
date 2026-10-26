@@ -15,6 +15,10 @@ import { useCommand } from "@/shell/commands/command"
 import { homeProjectDirectories } from "@/shell/layout/helpers"
 import { showToast } from "@/shell/notifications/toast"
 import { sessionHref } from "@/shell/routes/session"
+import { useOptionalSplitView } from "@/shell/split-view/context"
+import { SplitLayoutSwitcher } from "@/shell/split-view/workbench"
+import { useOptionalTaskboard } from "@/shell/taskboard/controller"
+import { TaskboardSidebarNav } from "@/shell/taskboard/view"
 import { useTabs } from "@/shell/tabs/tabs"
 import { useDirectoryPicker } from "@/workspaces/selection/picker"
 import { createServerSidebar } from "./controller"
@@ -62,6 +66,7 @@ export function SessionSidebar(props: {
   const command = useCommand()
   const servers = useServers()
   const tabs = useTabs()
+  const taskboard = useOptionalTaskboard()
   const pickDirectory = useDirectoryPicker()
   let searchInputRef: HTMLInputElement | undefined
 
@@ -123,6 +128,9 @@ export function SessionSidebar(props: {
   }
 
   const openNewSession = () => {
+    if (taskboard && (taskboard.viewMode() === "board" || taskboard.viewMode() === "discussion")) {
+      taskboard.openSessions()
+    }
     const selectedProj = projects().find((p) => p.key === props.filter.project)
     if (selectedProj) {
       void tabs.newDraft({ server: selectedProj.server, directory: selectedProj.directory }, "")
@@ -273,6 +281,8 @@ export function SessionSidebar(props: {
             </Show>
           </button>
 
+          <SplitLayoutSwitcher compact />
+
           <Tooltip placement="bottom" value={language.t("sessionSidebar.restore")}>
             <IconButton
               type="button"
@@ -284,6 +294,8 @@ export function SessionSidebar(props: {
             />
           </Tooltip>
         </div>
+
+        <TaskboardSidebarNav />
 
         {/* Sleek Search Input */}
         <div class="relative flex h-7 items-center gap-1.5 rounded-lg border border-v2-border-border-base/70 bg-v2-background-bg-base/60 px-2 transition-colors focus-within:border-v2-border-border-focus focus-within:bg-v2-background-bg-base">
@@ -581,6 +593,8 @@ function ServerSessions(props: {
 }) {
   const language = useLanguage()
   const location = useLocation()
+  const split = useOptionalSplitView()
+  const taskboard = useOptionalTaskboard()
   const controller = createServerSidebar(props.connection, () => props.filter)
   const pinned = createMemo(() => buildPinnedRows(controller.rows(), props.filter))
   const groups = createMemo(() => buildSessionGroups(controller.rows(), props.filter))
@@ -594,8 +608,50 @@ function ServerSessions(props: {
   const showServerHeader = () =>
     props.serverCount > 1 || !controller.connected() || controller.failed()
 
+  const serverKey = () => ServerConnection.key(props.connection)
+
+  const paneIdx = (row: SidebarRow) => split?.sessionPaneIndex(serverKey(), row.session.id) ?? -1
+
+  const isFocusedInSplit = (row: SidebarRow) => split?.isSessionFocused(serverKey(), row.session.id) ?? false
+
   const isActive = (row: SidebarRow) =>
-    location.pathname === sessionHref(ServerConnection.key(props.connection), row.session.id)
+    split?.active() ? paneIdx(row) !== -1 : location.pathname === sessionHref(serverKey(), row.session.id)
+
+  const isPrimaryFocused = (row: SidebarRow) => (split?.active() ? isFocusedInSplit(row) : isActive(row))
+
+  const paneBadgeInfo = (row: SidebarRow) => {
+    const info = split?.sessionSplitBadge(serverKey(), row.session.id)
+    if (!info) return undefined
+    const label =
+      info.count === 2
+        ? info.index === 0
+          ? language.t("splitView.badge.left")
+          : language.t("splitView.badge.right")
+        : info.index === 0
+          ? language.t("splitView.badge.left")
+          : info.index === 1
+            ? language.t("splitView.badge.middle")
+            : language.t("splitView.badge.right")
+    return {
+      label,
+      activeGroup: info.activeGroup,
+    }
+  }
+
+  const openRowInSplit = (row: SidebarRow, position?: "left" | "middle" | "right") => {
+    if (!split) {
+      controller.open(row, { background: true })
+      return
+    }
+    split.openSessionInSplit(
+      {
+        server: serverKey(),
+        sessionId: row.session.id,
+        directory: row.project.directory,
+      },
+      position,
+    )
+  }
 
   const groupLabel = (group: SidebarGroup) => {
     if (group.state === "input") return language.t("sessionSidebar.state.input")
@@ -638,8 +694,68 @@ function ServerSessions(props: {
   const renderSessionMenuItems = (row: SidebarRow) => {
     const rowPinned = () => isRowPinned(row, props.filter.pinned)
     const archived = () => row.session.time.archived !== undefined
+    const boundIssue = () => (taskboard?.enabled() ? taskboard.findIssueBySessionId(row.session.id) : undefined)
     return (
       <>
+        <Show when={taskboard?.enabled() && boundIssue()}>
+          {(match) => (
+            <Menu.Item onSelect={() => taskboard!.openSplit(match().issue.id)}>
+              <span class="flex items-center gap-2 text-indigo-400">
+                <Icon name="window-analytics" size="small" />
+                <span>双屏联动打开 {match().issue.id}</span>
+              </span>
+            </Menu.Item>
+          )}
+        </Show>
+        <Show when={taskboard?.enabled() && !boundIssue() && taskboard.activeIssue()}>
+          {(issue) => (
+            <Menu.Item
+              onSelect={() =>
+                taskboard!.bindExistingSessionToIssue(
+                  issue().id,
+                  row.session.id,
+                  "execution",
+                  serverKey(),
+                  row.session.location.directory,
+                )
+              }
+            >
+              <span class="flex items-center gap-2">
+                <Icon name="link" size="small" class="text-v2-icon-icon-muted" />
+                <span>绑定到议题 {issue().id}</span>
+              </span>
+            </Menu.Item>
+          )}
+        </Show>
+        <Menu.Item onSelect={() => openRowInSplit(row)}>
+          <span class="flex items-center gap-2">
+            <Icon name="split" size="small" class="text-v2-icon-icon-muted" />
+            <span>{language.t("sessionSidebar.action.openSplit")}</span>
+          </span>
+        </Menu.Item>
+        <Menu.Sub>
+          <Menu.SubTrigger>
+            <span class="flex items-center gap-2">
+              <Icon name="window-analytics" size="small" class="text-v2-icon-icon-muted" />
+              <span>{language.t("sessionSidebar.action.openSplitPosition")}</span>
+            </span>
+          </Menu.SubTrigger>
+          <Menu.Portal>
+            <Menu.SubContent class="min-w-[150px] [font-family:var(--v2-font-family-sans)]">
+              <Menu.Item onSelect={() => openRowInSplit(row, "left")}>
+                {language.t("sessionSidebar.action.openSplitLeft")}
+              </Menu.Item>
+              <Show when={(split?.count() ?? 1) >= 2}>
+                <Menu.Item onSelect={() => openRowInSplit(row, "middle")}>
+                  {language.t("sessionSidebar.action.openSplitMiddle")}
+                </Menu.Item>
+              </Show>
+              <Menu.Item onSelect={() => openRowInSplit(row, "right")}>
+                {language.t("sessionSidebar.action.openSplitRight")}
+              </Menu.Item>
+            </Menu.SubContent>
+          </Menu.Portal>
+        </Menu.Sub>
         <Menu.Item onSelect={() => controller.open(row, { background: true })}>
           <span class="flex items-center gap-2">
             <Icon name="square-arrow-top-right" size="small" class="text-v2-icon-icon-muted" />
@@ -712,12 +828,74 @@ function ServerSessions(props: {
     const row = () => itemProps.row
     const title = () => normalizeSessionTitle(row().session.title) || language.t("sessionSidebar.untitled")
     const activeRow = () => isActive(row())
+    const focusedRow = () => isPrimaryFocused(row())
+    const badge = () => paneBadgeInfo(row())
+    const boundIssue = createMemo(() =>
+      taskboard?.enabled() ? taskboard.findIssueBySessionId(row().session.id) : undefined,
+    )
     const rowPinned = () => isRowPinned(row(), props.filter.pinned)
     const isRenaming = () => renamingKey() === row().key
     const relativeTime = () => formatRelativeTime(row().session.time.updated ?? row().session.time.created)
     const subpath = () => sessionSubpathLabel(row())
     const showSubtitle = () =>
       props.filter.showPath !== false && (!itemProps.compactProject || !!subpath())
+    let suppressClick = false
+
+    const handleRowPointerDown = (e: PointerEvent) => {
+      if (e.button !== 0 || !split) return
+      const startX = e.clientX
+      const startY = e.clientY
+      const rowData = row()
+      const rowTitle = title()
+      const srv = serverKey()
+      let dragging = false
+
+      const onMove = (moveEvent: PointerEvent) => {
+        const dx = moveEvent.clientX - startX
+        const dy = moveEvent.clientY - startY
+        if (!dragging) {
+          if (Math.hypot(dx, dy) < 6) return
+          dragging = true
+          split.startPointerDrag({
+            kind: "session",
+            title: rowTitle,
+            directory: rowData.project.directory,
+            server: srv,
+            sessionId: rowData.session.id,
+            clientX: moveEvent.clientX,
+            clientY: moveEvent.clientY,
+          })
+        } else {
+          split.updatePointerDrag(moveEvent.clientX, moveEvent.clientY)
+        }
+      }
+
+      const cleanup = () => {
+        window.removeEventListener("pointermove", onMove)
+        window.removeEventListener("pointerup", onUp)
+        window.removeEventListener("pointercancel", onCancel)
+      }
+
+      const onUp = (upEvent: PointerEvent) => {
+        cleanup()
+        if (!dragging) return
+        suppressClick = true
+        setTimeout(() => {
+          suppressClick = false
+        }, 80)
+        split.endPointerDrag(upEvent.clientX, upEvent.clientY)
+      }
+
+      const onCancel = () => {
+        cleanup()
+        if (!dragging) return
+        split.cancelPointerDrag()
+      }
+
+      window.addEventListener("pointermove", onMove)
+      window.addEventListener("pointerup", onUp)
+      window.addEventListener("pointercancel", onCancel)
+    }
 
     return (
       <Menu.Context appearance="compact">
@@ -726,9 +904,12 @@ function ServerSessions(props: {
           data-slot="session-sidebar-row-wrapper"
           data-state={row().state}
           data-active={activeRow() ? "" : undefined}
+          data-focused={focusedRow() ? "true" : undefined}
           class="group/row relative flex min-w-0 items-center rounded-lg transition-colors"
           classList={{
-            "bg-v2-overlay-simple-overlay-pressed shadow-[inset_2px_0_0_var(--v2-background-bg-accent)]": activeRow(),
+            "bg-v2-overlay-simple-overlay-pressed shadow-[inset_2px_0_0_var(--v2-background-bg-accent)]": focusedRow(),
+            "bg-v2-overlay-simple-overlay-hover/75 shadow-[inset_2px_0_0_var(--v2-border-border-strong)]":
+              activeRow() && !focusedRow(),
             "hover:bg-v2-overlay-simple-overlay-hover": !activeRow(),
           }}
         >
@@ -768,10 +949,57 @@ function ServerSessions(props: {
               data-state={row().state}
               aria-current={activeRow() ? "page" : undefined}
               title={`${title()}\n${row().project.directory}`}
-              onClick={() => controller.open(row())}
-              class="flex min-w-0 flex-1 flex-col gap-0.5 px-2.5 py-1.5 text-start focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-v2-border-border-focus"
+              onPointerDown={handleRowPointerDown}
+              onClick={(e) => {
+                if (suppressClick) {
+                  e.preventDefault()
+                  e.stopPropagation()
+                  suppressClick = false
+                  return
+                }
+                if ((e.altKey || e.metaKey || e.ctrlKey) && split) {
+                  e.preventDefault()
+                  openRowInSplit(row())
+                  return
+                }
+                if (taskboard && (taskboard.viewMode() === "board" || taskboard.viewMode() === "discussion")) {
+                  taskboard.openSessions()
+                }
+                controller.open(row())
+              }}
+              class="flex min-w-0 flex-1 cursor-grab flex-col gap-0.5 px-2.5 py-1.5 text-start focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-v2-border-border-focus active:cursor-grabbing"
             >
               <div class="flex min-w-0 items-center gap-1.5">
+                <Show when={boundIssue()}>
+                  {(match) => (
+                    <span
+                      data-slot="session-sidebar-issue-badge"
+                      title={`关联议题 ${match().issue.id}: ${match().issue.title}`}
+                      class="shrink-0 rounded bg-indigo-500/15 px-1 py-0.25 font-mono text-[10px] leading-3 [font-weight:580] text-indigo-400 ring-1 ring-inset ring-indigo-500/30"
+                    >
+                      {match().issue.id}
+                    </span>
+                  )}
+                </Show>
+                <Show when={badge()}>
+                  {(info) => (
+                    <span
+                      data-slot="session-sidebar-pane-badge"
+                      data-active-group={info().activeGroup ? "true" : "false"}
+                      class="shrink-0 rounded px-1 py-0.25 text-[10px] leading-3 [font-weight:580]"
+                      classList={{
+                        "bg-v2-background-bg-accent/20 text-v2-text-text-base ring-1 ring-inset ring-v2-background-bg-accent/45":
+                          focusedRow(),
+                        "bg-v2-overlay-simple-overlay-hover text-v2-text-text-base":
+                          info().activeGroup && !focusedRow(),
+                        "bg-v2-overlay-simple-overlay-hover/55 text-v2-text-text-muted":
+                          !info().activeGroup && !focusedRow(),
+                      }}
+                    >
+                      {info().label}
+                    </span>
+                  )}
+                </Show>
                 <span
                   class="min-w-0 flex-1 truncate text-[13px] leading-[18px]"
                   dir="auto"
@@ -857,6 +1085,21 @@ function ServerSessions(props: {
               data-slot="session-sidebar-row-actions"
               class="pointer-events-none absolute end-1.5 top-1.5 flex items-center gap-0.5 rounded-md bg-v2-background-bg-deep/90 px-0.5 py-0.5 opacity-0 backdrop-blur-xs transition-opacity group-hover/row:pointer-events-auto group-hover/row:opacity-100 group-focus-within/row:pointer-events-auto group-focus-within/row:opacity-100 [&:has([data-expanded])]:pointer-events-auto [&:has([data-expanded])]:opacity-100"
             >
+              <Tooltip placement="top" value={language.t("sessionSidebar.action.openSplit")}>
+                <button
+                  type="button"
+                  data-action="sidebar-open-split"
+                  aria-label={language.t("sessionSidebar.action.openSplit")}
+                  onClick={(e) => {
+                    e.stopPropagation()
+                    openRowInSplit(row())
+                  }}
+                  class="flex size-5 items-center justify-center rounded text-v2-icon-icon-muted transition-colors hover:bg-v2-overlay-simple-overlay-hover hover:text-v2-text-text-base"
+                >
+                  <Icon name="split" size="small" />
+                </button>
+              </Tooltip>
+
               <Menu appearance="compact" placement="bottom-end">
                 <Tooltip placement="top" value={language.t("sessionSidebar.action.more")}>
                   <Menu.Trigger

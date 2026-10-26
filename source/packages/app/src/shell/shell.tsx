@@ -15,6 +15,11 @@ import { useCommand } from "@/shell/commands/command"
 import { useLanguage } from "@/runtime/i18n/language"
 import { createSidebarPreferences } from "@/shell/session-sidebar/preferences"
 import { SessionSidebar } from "@/shell/session-sidebar/sidebar"
+import { SplitViewProvider } from "@/shell/split-view/context"
+import { SplitWorkbench } from "@/shell/split-view/workbench"
+import { RemoteControlProvider } from "@/shell/remote-control/controller"
+import { TaskboardProvider } from "@/shell/taskboard/controller"
+import { TaskboardWorkbench } from "@/shell/taskboard/view"
 
 export default function Layout(props: ParentProps) {
   const platform = usePlatform()
@@ -49,74 +54,84 @@ export default function Layout(props: ParentProps) {
 
   return (
     <TitlebarRightProvider>
-      <div
-        class="relative bg-v2-background-bg-deep flex-1 min-h-0 min-w-0 flex flex-col select-none [&_input]:select-text [&_textarea]:select-text [&_[contenteditable]]:select-text"
-        style={{
-          // Mobile panels only need clearance for their outer border.
-          "--shell-inline-inset": mobile() ? "1px" : "8px",
-          // A bottom mobile titlebar leaves main's top edge to the safe area. Native Windows chrome supplies the gap;
-          // retain outer-outline clearance.
-          "--shell-top-inset": bottomTitlebar()
-            ? "0px"
-            : platform.platform === "desktop" && platform.os === "windows"
-              ? "1px"
-              : "8px",
-          "--shell-bottom-inset": bottomTitlebar()
-            ? "8px"
-            : "max(0px, calc(8px - var(--safe-area-inset-bottom, env(safe-area-inset-bottom, 0px))))",
-        }}
-      >
-        <Titlebar
-          hideSessionTabs={showSidebar()}
-          verticalTabs={verticalTabs() ? { mount: state.tabsMount } : undefined}
-        />
-        <div class="flex flex-1 min-h-0 min-w-0 flex-row">
-          <Show when={showSidebar()}>
-            <SessionSidebar filter={sidebar} setFilter={setSidebar} close={() => setSidebar("enabled", false)} />
-          </Show>
-          <Show when={verticalTabs()}>
-            <aside
-              ref={(element) => setState("tabsMount", element)}
-              data-slot="vertical-tabs-sidebar"
-              class="relative flex h-full min-h-0 shrink-0 flex-col bg-v2-background-bg-deep pe-0.5 ps-2.5 pb-[var(--shell-bottom-inset,8px)] pt-[var(--shell-top-inset,8px)]"
+      <SplitViewProvider>
+        <RemoteControlProvider>
+          <TaskboardProvider>
+          <div
+            class="relative bg-v2-background-bg-deep flex-1 min-h-0 min-w-0 flex flex-col select-none [&_input]:select-text [&_textarea]:select-text [&_[contenteditable]]:select-text"
+          style={{
+            // Mobile panels only need clearance for their outer border.
+            "--shell-inline-inset": mobile() ? "1px" : "8px",
+            // A bottom mobile titlebar leaves main's top edge to the safe area. Native Windows chrome supplies the gap;
+            // retain outer-outline clearance.
+            "--shell-top-inset": bottomTitlebar()
+              ? "0px"
+              : platform.platform === "desktop" && platform.os === "windows"
+                ? "1px"
+                : "8px",
+            "--shell-bottom-inset": bottomTitlebar()
+              ? "8px"
+              : "max(0px, calc(8px - var(--safe-area-inset-bottom, env(safe-area-inset-bottom, 0px))))",
+          }}
+        >
+          <Titlebar
+            hideSessionTabs={showSidebar()}
+            verticalTabs={verticalTabs() ? { mount: state.tabsMount } : undefined}
+          />
+          <div class="flex flex-1 min-h-0 min-w-0 flex-row">
+            <Show when={showSidebar()}>
+              <SessionSidebar filter={sidebar} setFilter={setSidebar} close={() => setSidebar("enabled", false)} />
+            </Show>
+            <Show when={verticalTabs()}>
+              <aside
+                ref={(element) => setState("tabsMount", element)}
+                data-slot="vertical-tabs-sidebar"
+                class="relative flex h-full min-h-0 shrink-0 flex-col bg-v2-background-bg-deep pe-0.5 ps-2.5 pb-[var(--shell-bottom-inset,8px)] pt-[var(--shell-top-inset,8px)]"
+                style={{
+                  width: `${state.tabsWidth}px`,
+                  "padding-bottom": "max(10px, var(--safe-area-inset-bottom, env(safe-area-inset-bottom, 0px)))",
+                }}
+              >
+                <ResizeHandle
+                  class="-end-2"
+                  direction="horizontal"
+                  size={state.tabsWidth}
+                  min={140}
+                  max={520}
+                  onResize={(width) => setState("tabsWidth", width)}
+                />
+              </aside>
+            </Show>
+            {/* Size containment collapses percentage-height descendants in WebKit. */}
+            <main
+              class="flex-1 min-h-0 min-w-0 overflow-x-hidden flex flex-col items-start contain-content"
               style={{
-                width: `${state.tabsWidth}px`,
-                "padding-bottom": "max(10px, var(--safe-area-inset-bottom, env(safe-area-inset-bottom, 0px)))",
+                "padding-top": bottomTitlebar() ? "env(safe-area-inset-top, 0px)" : "0px",
+                "padding-bottom":
+                  bottomTitlebar() || settings.active()
+                    ? "0px"
+                    : "var(--safe-area-inset-bottom, env(safe-area-inset-bottom, 0px))",
+                "--settings-bottom-inset": bottomTitlebar()
+                  ? "40px"
+                  : "var(--safe-area-inset-bottom, env(safe-area-inset-bottom, 0px))",
               }}
             >
-              <ResizeHandle
-                class="-end-2"
-                direction="horizontal"
-                size={state.tabsWidth}
-                min={140}
-                max={520}
-                onResize={(width) => setState("tabsWidth", width)}
-              />
-            </aside>
-          </Show>
-          {/* Size containment collapses percentage-height descendants in WebKit. */}
-          <main
-            class="flex-1 min-h-0 min-w-0 overflow-x-hidden flex flex-col items-start contain-content"
-            style={{
-              "padding-top": bottomTitlebar() ? "env(safe-area-inset-top, 0px)" : "0px",
-              "padding-bottom":
-                bottomTitlebar() || settings.active()
-                  ? "0px"
-                  : "var(--safe-area-inset-bottom, env(safe-area-inset-bottom, 0px))",
-              "--settings-bottom-inset": bottomTitlebar()
-                ? "40px"
-                : "var(--safe-area-inset-bottom, env(safe-area-inset-bottom, 0px))",
-            }}
-          >
-            <ExtensionServerCover>
-              <Suspense>{props.children}</Suspense>
-            </ExtensionServerCover>
-          </main>
-        </div>
-        <ExtensionSlot at="window.bottom" input={{}} />
-        <ToastRegion />
-        <UploadToastHost />
-      </div>
+              <ExtensionServerCover>
+                <TaskboardWorkbench>
+                  <SplitWorkbench>
+                    <Suspense>{props.children}</Suspense>
+                  </SplitWorkbench>
+                </TaskboardWorkbench>
+              </ExtensionServerCover>
+            </main>
+          </div>
+            <ExtensionSlot at="window.bottom" input={{}} />
+            <ToastRegion />
+            <UploadToastHost />
+          </div>
+          </TaskboardProvider>
+        </RemoteControlProvider>
+      </SplitViewProvider>
     </TitlebarRightProvider>
   )
 }
